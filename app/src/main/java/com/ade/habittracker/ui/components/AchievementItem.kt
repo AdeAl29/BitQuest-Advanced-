@@ -1,128 +1,127 @@
 package com.ade.habittracker.ui.components
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ade.habittracker.model.Achievement
-import com.ade.habittracker.ui.theme.*
+import com.ade.habittracker.ui.theme.AccentYellow
+import com.ade.habittracker.ui.theme.CardBackground
+import com.ade.habittracker.ui.theme.TextColorPrimary
+import com.ade.habittracker.ui.theme.TextColorSecondary
 
 @Composable
-fun AchievementItem(
-    achievement: Achievement,
-    onClick: () -> Unit
-) {
-    val borderColor = if (achievement.isUnlocked) AccentYellow else CardBackground
-    val imageAlpha = if (achievement.isUnlocked) 1f else 0.4f
-    val progress =
-        if (achievement.goal > 0) achievement.progress.toFloat() / achievement.goal.toFloat() else 0f
+fun AchievementItem(achievement: Achievement) {
+    // Animasi Progress Bar
+    val progressPercent = (achievement.progress.toFloat() / achievement.target.toFloat()).coerceIn(0f, 1f)
+    val animatedProgress by animateFloatAsState(targetValue = progressPercent, label = "progress")
 
     Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBackground),
-        border = BorderStroke(2.dp, borderColor),
-        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .height(110.dp)    // 🔥 ukuran seragam untuk semua item
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBackground),
+        // Memberikan border emas jika achievement sudah terbuka
+        border = if (achievement.isUnlocked) androidx.compose.foundation.BorderStroke(1.dp, AccentYellow.copy(alpha = 0.5f)) else null
     ) {
         Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp),
+                .padding(12.dp)
+                .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-
-            // --- ICON / AVATAR ---
+            // --- BAGIAN ICON ---
             Box(
                 modifier = Modifier
-                    .size(60.dp)
+                    .size(56.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF48484A)),
+                    .background(if (achievement.isUnlocked) AccentYellow.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.3f))
+                    .border(1.dp, if (achievement.isUnlocked) AccentYellow else Color.Gray, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = achievement.iconResId),
-                    contentDescription = achievement.title,
-                    contentScale = ContentScale.Crop,
-                    alpha = imageAlpha,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            // --- TEXT & PROGRESS ---
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.Center
-            ) {
-
-                Text(
-                    achievement.title,
-                    color = TextColorPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
-
-                // ruang kecil agar rapi
-                Spacer(modifier = Modifier.height(6.dp))
-
-                if (!achievement.isUnlocked && achievement.goal > 1) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(CircleShape),
-                        color = AccentYellow,
-                        trackColor = Color(0xFF48484A)
-                    )
-                } else if (!achievement.isUnlocked) {
-                    Text(
-                        "Terkunci",
-                        color = TextColorSecondary,
-                        fontSize = 12.sp
+                if (achievement.isUnlocked) {
+                    // 🔥 SUDAH DIPERBAIKI: Menggunakan imageResId
+                    Image(
+                        painter = painterResource(id = achievement.imageResId),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(32.dp)
                     )
                 } else {
-                    Text(
-                        "Selesai ✓",
-                        color = AccentYellow,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Locked",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
 
-            // --- CHECK ICON (UNLOCKED) ---
-            if (achievement.isUnlocked) {
-                Spacer(modifier = Modifier.width(10.dp))
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = "Unlocked",
-                    tint = AccentYellow,
-                    modifier = Modifier.size(22.dp)
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // --- BAGIAN TEKS & PROGRESS ---
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = achievement.title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = if (achievement.isUnlocked) TextColorPrimary else Color.Gray
                 )
+
+                Text(
+                    text = achievement.description,
+                    fontSize = 12.sp,
+                    color = TextColorSecondary,
+                    lineHeight = 14.sp
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Progress Bar
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    LinearProgressIndicator(
+                        progress = { animatedProgress },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = AccentYellow,
+                        trackColor = Color.DarkGray
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // 🔥 SUDAH DIPERBAIKI: Menggunakan target (bukan goal)
+                    Text(
+                        text = "${achievement.progress}/${achievement.target}",
+                        fontSize = 10.sp,
+                        color = if (achievement.isUnlocked) AccentYellow else Color.Gray,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

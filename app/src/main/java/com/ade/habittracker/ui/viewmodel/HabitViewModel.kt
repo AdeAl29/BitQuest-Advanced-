@@ -1,46 +1,99 @@
-package com.ade.habittracker.ui.viewmodel
+﻿package com.ade.habittracker.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.annotation.DrawableRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.ade.habittracker.R
+import com.ade.habittracker.data.DailyReward
+import com.ade.habittracker.data.DailyRewardsConfig
 import com.ade.habittracker.data.HabitRepository
+import com.ade.habittracker.data.ShopItem
+import com.ade.habittracker.data.ShopType
+import com.ade.habittracker.data.predefinedHabitTemplates
 import com.ade.habittracker.model.Achievement
 import com.ade.habittracker.model.AppData
+import com.ade.habittracker.model.Habit
 import com.ade.habittracker.model.HabitHistoryItem
+import com.ade.habittracker.model.HabitScheduleType
+import com.ade.habittracker.model.isDueOn
+import com.ade.habittracker.model.normalizeForDate
+import com.ade.habittracker.model.scheduleLabel
 import com.ade.habittracker.notification.HabitReminderWorker
+import com.ade.habittracker.notification.TimeSlotReminderWorker
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.*
+import java.time.Duration
+import java.time.Instant
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
+import java.io.File
+import java.io.FileOutputStream
+import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-// Data class untuk Avatar
+private const val REMINDER_TAG = "habit_reminder"
+private const val SNOOZE_REMINDER_TAG = "habit_reminder_snooze"
+private const val TIME_SLOT_REMINDER_TAG = "habit_time_slot_reminder"
+private val TIME_PATTERN = Regex("^([01]\\d|2[0-3]):([0-5]\\d)$")
+
 data class AvatarItem(
     val id: String,
     @DrawableRes val resId: Int,
     val requiredLevel: Int
 )
 
-// Data class untuk Pilihan Gelar
 data class TitleItem(
     val title: String,
     val requiredLevel: Int
 )
 
+data class WeeklySummary(
+    val weekLabel: String,
+    val completedThisWeek: Int,
+    val dueThisWeek: Int,
+    val completionRate: Float,
+    val mostMissedHabitName: String,
+    val mostMissedCount: Int,
+    val bestStreakDays: Int,
+    val nextWeekTarget: Int,
+    val nextWeekDueCount: Int
+)
+
+private data class ScheduleConfig(
+    val type: HabitScheduleType,
+    val customDays: List<Int> = emptyList(),
+    val targetPerWeek: Int = 3
+)
+
 class HabitViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = HabitRepository(application.applicationContext)
+    private val appContext = application.applicationContext
 
-    // --- DAFTAR SEMUA AVATAR ---
     private val allAvatars = listOf(
         AvatarItem("avatar_level1", R.drawable.avatar_level1, 1),
         AvatarItem("avatar_level5", R.drawable.avatar_level5, 5),
@@ -49,7 +102,6 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         AvatarItem("avatar_level20", R.drawable.avatar_master, 20)
     )
 
-    // --- DAFTAR SEMUA GELAR ---
     private val allTitles = listOf(
         TitleItem("Petualang Baru", 1),
         TitleItem("Pemula Produktif", 5),
@@ -58,25 +110,43 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         TitleItem("Sang Legenda", 20)
     )
 
-    // --- STATE FLOW UTAMA ---
     val appData: StateFlow<AppData?> = repository.appData.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = null
     )
 
-    // --- STATE FLOW KHUSUS RIWAYAT (HISTORY) ---
     val habitHistory: StateFlow<List<HabitHistoryItem>> = appData.map { data ->
         data?.history?.sortedByDescending { it.timestamp } ?: emptyList()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // --- LIST ACHIEVEMENT ---
+    val heatmapData: StateFlow<Map<String, Int>> = habitHistory.map { history ->
+        history
+            .groupBy {
+                Instant.ofEpochMilli(it.timestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+                    .toString()
+            }
+            .mapValues { entry -> entry.value.size }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     val achievements: StateFlow<List<Achievement>> = appData.map { data ->
         if (data == null) emptyList()
         else getAllAchievements(data.level, data.streak, data.totalXp, data.totalHabitsCompleted)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // --- USER PROFILE ---
+    val equippedBadgesMap: StateFlow<Map<Int, Achievement>> = combine(appData, achievements) { data, list ->
+        val map = mutableMapOf<Int, Achievement>()
+        data?.equippedBadges?.forEach { (slotIndex, achievementId) ->
+            val found = list.find { it.id == achievementId }
+            if (found != null && found.isUnlocked) {
+                map[slotIndex] = found
+            }
+        }
+        map
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     val userName: StateFlow<String> = appData.map { data ->
         data?.userName ?: "Petualang"
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Petualang")
@@ -87,16 +157,12 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
 
     val avatarListWithLockStatus: StateFlow<List<Pair<AvatarItem, Boolean>>> = appData.map { data ->
         val currentLevel = data?.level ?: 1
-        allAvatars.map { avatar ->
-            avatar to (currentLevel >= avatar.requiredLevel)
-        }
+        allAvatars.map { avatar -> avatar to (currentLevel >= avatar.requiredLevel) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val titleListWithLockStatus: StateFlow<List<Pair<TitleItem, Boolean>>> = appData.map { data ->
         val currentLevel = data?.level ?: 1
-        allTitles.map { title ->
-            title to (currentLevel >= title.requiredLevel)
-        }
+        allTitles.map { title -> title to (currentLevel >= title.requiredLevel) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val profileImageResId: StateFlow<Int> = appData.map { data ->
@@ -104,10 +170,71 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         allAvatars.find { it.id == savedId }?.resId ?: R.drawable.avatar_level1
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), R.drawable.avatar_level1)
 
+    val weeklySummary: StateFlow<WeeklySummary?> = appData.map { data ->
+        data?.let { buildWeeklySummary(it) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    // --- FUNGSI UPDATE SETTINGS (UPDATE) ---
+    private val _dailyRewardState = MutableStateFlow<DailyReward?>(null)
+    val dailyRewardState: StateFlow<DailyReward?> = _dailyRewardState.asStateFlow()
 
-    // 1. Musik ON/OFF
+    fun equipBadge(slotIndex: Int, achievementId: String?) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val currentBadges = currentData.equippedBadges.toMutableMap()
+
+            if (achievementId == null) {
+                currentBadges.remove(slotIndex)
+            } else {
+                currentBadges[slotIndex] = achievementId
+            }
+
+            repository.saveAppData(currentData.copy(equippedBadges = currentBadges))
+        }
+    }
+
+    fun buyItem(item: ShopItem) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            if (currentData.coins >= item.price) {
+                val newCoins = currentData.coins - item.price
+                val updatedData = when (item.type) {
+                    ShopType.THEME -> currentData.copy(
+                        coins = newCoins,
+                        ownedThemes = currentData.ownedThemes + item.id
+                    )
+                    ShopType.MUSIC -> currentData.copy(
+                        coins = newCoins,
+                        ownedMusic = currentData.ownedMusic + item.id
+                    )
+                    ShopType.AVATAR -> currentData.copy(coins = newCoins)
+                    ShopType.CHIBI -> currentData.copy(
+                        coins = newCoins,
+                        ownedChibiSkins = currentData.ownedChibiSkins + item.id
+                    )
+                    ShopType.SPLASH -> currentData.copy(
+                        coins = newCoins,
+                        ownedSplashVideos = currentData.ownedSplashVideos + item.id
+                    )
+                }
+                repository.saveAppData(updatedData)
+            }
+        }
+    }
+
+    fun equipItem(item: ShopItem) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val updatedData = when (item.type) {
+                ShopType.THEME -> currentData.copy(activeTheme = item.id)
+                ShopType.MUSIC -> currentData.copy(activeMusic = item.id)
+                ShopType.AVATAR -> currentData.copy(profileImageId = item.id)
+                ShopType.CHIBI -> currentData.copy(activeChibiSkin = item.id)
+                ShopType.SPLASH -> currentData.copy(activeSplashVideo = item.id)
+            }
+            repository.saveAppData(updatedData)
+        }
+    }
+
     fun setMusicEnabled(isEnabled: Boolean) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
@@ -115,7 +242,6 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // 2. Chibi ON/OFF
     fun setChibiEnabled(isEnabled: Boolean) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
@@ -123,12 +249,57 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- FUNGSI UPDATE PROFIL ---
+    fun setChibiVoiceEnabled(isEnabled: Boolean) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            repository.saveAppData(currentData.copy(isChibiVoiceEnabled = isEnabled))
+        }
+    }
+
+    fun setReminderEnabled(isEnabled: Boolean) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val updated = currentData.copy(isReminderEnabled = isEnabled)
+            repository.saveAppData(updated)
+            rescheduleHabitReminders(updated)
+        }
+    }
+
+    fun updateDefaultReminderTime(time: String) {
+        viewModelScope.launch {
+            if (!TIME_PATTERN.matches(time)) return@launch
+            val currentData = appData.value ?: return@launch
+            val updated = currentData.copy(defaultReminderTime = time)
+            repository.saveAppData(updated)
+            rescheduleHabitReminders(updated)
+        }
+    }
+
+    fun setHabitReminderEnabled(habitId: Int, isEnabled: Boolean) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+
+            val updatedHabits = currentData.habits.map { habit ->
+                if (habit.id == habitId && !habit.isDailyQuest) {
+                    habit.copy(
+                        reminderEnabled = isEnabled,
+                        reminderTime = sanitizeReminderTime(habit.reminderTime) ?: currentData.defaultReminderTime
+                    )
+                } else {
+                    habit
+                }
+            }
+
+            val updated = currentData.copy(habits = updatedHabits)
+            repository.saveAppData(updated)
+            rescheduleHabitReminders(updated)
+        }
+    }
 
     fun updateUserName(newName: String) {
         viewModelScope.launch {
-            val currentData = appData.value ?: return@launch
-            if(newName.isNotBlank()) {
+            val currentData = appData.value ?: AppData()
+            if (newName.isNotBlank()) {
                 repository.saveAppData(currentData.copy(userName = newName))
             }
         }
@@ -137,7 +308,19 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
     fun updateProfileImageId(newId: String) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
-            repository.saveAppData(currentData.copy(profileImageId = newId))
+            repository.saveAppData(
+                currentData.copy(
+                    profileImageId = newId,
+                    customProfileImagePath = null
+                )
+            )
+        }
+    }
+
+    fun importCustomProfileImage(uri: Uri, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = saveCustomProfileImage(uri)
+            onResult(success)
         }
     }
 
@@ -148,84 +331,265 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- LOGIK HABIT, PROGRESS, RESET HARIAN & BULANAN ---
+    fun markAchievementsBannerShown(achievementIds: Set<String>) {
+        if (achievementIds.isEmpty()) return
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val merged = (currentData.shownAchievementBannerIds + achievementIds).distinct()
+            if (merged != currentData.shownAchievementBannerIds) {
+                repository.saveAppData(currentData.copy(shownAchievementBannerIds = merged))
+            }
+        }
+    }
+
+    fun syncAccountWithFirebaseSession() {
+        viewModelScope.launch {
+            val uid = runCatching { FirebaseAuth.getInstance().currentUser?.uid }
+                .getOrNull()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+
+            if (uid == null) {
+                repository.switchActiveAccount(null)
+                val guestData = repository.getCurrentAppData()
+                if (guestData.isLoggedIn) {
+                    repository.saveAppData(guestData.copy(isLoggedIn = false))
+                }
+                return@launch
+            }
+
+            repository.switchActiveAccount(uid)
+            val currentData = repository.getCurrentAppData()
+            if (!currentData.isLoggedIn) {
+                repository.saveAppData(currentData.copy(isLoggedIn = true))
+            }
+        }
+    }
+
+    fun onAuthenticated(userId: String, suggestedUserName: String? = null) {
+        viewModelScope.launch {
+            val accountId = userId.trim()
+            if (accountId.isEmpty()) return@launch
+
+            repository.switchActiveAccount(accountId)
+            val currentData = repository.getCurrentAppData()
+
+            val normalizedName = suggestedUserName
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() && it != "Petualang" }
+
+            val shouldApplyName = normalizedName != null &&
+                (currentData.userName.isBlank() || currentData.userName == "Petualang")
+
+            val updated = currentData.copy(
+                isLoggedIn = true,
+                userName = if (shouldApplyName) normalizedName else currentData.userName
+            )
+
+            if (updated != currentData) {
+                repository.saveAppData(updated)
+            }
+        }
+    }
+
+    fun onUnauthenticated() {
+        viewModelScope.launch {
+            val currentData = repository.getCurrentAppData()
+            if (currentData.isLoggedIn) {
+                repository.saveAppData(currentData.copy(isLoggedIn = false))
+            }
+            repository.switchActiveAccount(null)
+            rescheduleHabitReminders(AppData())
+        }
+    }
+
+    fun setLoggedIn(isLoggedIn: Boolean) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: repository.getCurrentAppData()
+            repository.saveAppData(currentData.copy(isLoggedIn = isLoggedIn))
+        }
+    }
+
+    fun logout() {
+        onUnauthenticated()
+    }
 
     fun resetHabitsIfNewDay() {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
-
-            val dailyFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val monthlyFormat = SimpleDateFormat("yyyy-MM", Locale.getDefault()) // Format Bulan
-
-            val now = Date()
-            val todayStr = dailyFormat.format(now)
-            val currentMonthStr = monthlyFormat.format(now)
+            val today = LocalDate.now()
+            val todayStr = today.toString()
+            val currentMonthStr = today.format(DateTimeFormatter.ofPattern("yyyy-MM"))
 
             var updatedData = currentData
 
-            // 1. CEK RESET BULANAN (Season Baru)
             if (updatedData.lastMonthlyResetDate != currentMonthStr) {
-                // Hanya reset jika ini bukan install pertama (field tidak kosong)
-                if (updatedData.lastMonthlyResetDate.isNotEmpty()) {
-                    updatedData = updatedData.copy(
-                        level = 1,      // Reset Level ke 1
-                        totalXp = 0     // Reset XP ke 0
-                        // Streak dan Total Habits TIDAK direset agar user tetap semangat
-                    )
-                }
-                // Update penanda bulan terakhir
                 updatedData = updatedData.copy(lastMonthlyResetDate = currentMonthStr)
             }
 
-            // 2. CEK RESET HARIAN
-            if (updatedData.lastResetDate != todayStr) {
-                val resetHabits = updatedData.habits.map { it.copy(isCompleted = false) }
+            val isNewLoginDay = updatedData.lastLoginDate != todayStr
+            if (isNewLoginDay) {
+                val currentStreakIndex = calculateLoginStreakIndex(
+                    lastLoginDate = updatedData.lastLoginDate,
+                    currentStreakIndex = updatedData.loginStreakIndex,
+                    today = today
+                )
 
-                // Tambah hari login
-                val newTotalLogin = updatedData.totalLoginDays + 1
+                val reward = DailyRewardsConfig.REWARDS.getOrElse(currentStreakIndex) { DailyRewardsConfig.REWARDS[0] }
+                _dailyRewardState.value = reward
 
                 updatedData = updatedData.copy(
-                    habits = resetHabits,
-                    lastResetDate = todayStr,
-                    totalLoginDays = newTotalLogin
+                    lastLoginDate = todayStr,
+                    loginStreakIndex = currentStreakIndex,
+                    totalLoginDays = updatedData.totalLoginDays + 1
                 )
             }
 
-            // Simpan perubahan jika ada data yang berubah
+            val persistentHabits = updatedData.habits
+                .filterNot { it.isDailyQuest }
+                .map { migrateLegacySchedule(it).normalizeForDate(today) }
+
+            val mergedHabits = if (isNewLoginDay) {
+                val list = persistentHabits.toMutableList()
+                createDailyQuest(updatedData.habits.maxOfOrNull { it.id } ?: 0)?.let { list.add(it) }
+                list
+            } else {
+                val existingQuest = updatedData.habits.filter { it.isDailyQuest }
+                persistentHabits + existingQuest
+            }
+
+            updatedData = updatedData.copy(
+                habits = mergedHabits,
+                lastResetDate = todayStr
+            )
+
             if (updatedData != currentData) {
                 repository.saveAppData(updatedData)
+                rescheduleHabitReminders(updatedData)
             }
+        }
+    }
+
+    fun claimDailyReward() {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val reward = _dailyRewardState.value ?: return@launch
+            val newCoins = currentData.coins + reward.coins
+            val newLevel = calculateLevel(currentData.totalXp + 20)
+
+            repository.saveAppData(
+                currentData.copy(
+                    coins = newCoins,
+                    totalXp = currentData.totalXp + 20,
+                    level = newLevel
+                )
+            )
+            _dailyRewardState.value = null
         }
     }
 
     fun addHabit(name: String, schedule: String, weight: Int) {
+        val inferred = inferScheduleFromText(schedule)
+        addHabit(
+            name = name,
+            weight = weight,
+            scheduleType = inferred.type,
+            customDays = inferred.customDays,
+            targetPerWeek = inferred.targetPerWeek,
+            reminderEnabled = true,
+            reminderTime = null
+        )
+    }
+
+    fun addHabit(
+        name: String,
+        weight: Int,
+        scheduleType: HabitScheduleType,
+        customDays: List<Int>,
+        targetPerWeek: Int,
+        reminderEnabled: Boolean,
+        reminderTime: String?
+    ) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
-            val newHabit = currentData.habits.toMutableList().apply {
-                add(
-                    com.ade.habittracker.model.Habit(
-                        id = (currentData.habits.maxOfOrNull { it.id } ?: 0) + 1,
-                        name = name,
-                        schedule = schedule,
-                        weight = weight
-                    )
-                )
-            }
-            repository.saveAppData(currentData.copy(habits = newHabit))
+
+            val normalizedType = normalizeScheduleType(scheduleType, customDays)
+            val sanitizedDays = customDays.distinct().sorted().filter { it in 1..7 }
+            val sanitizedTime = sanitizeReminderTime(reminderTime) ?: currentData.defaultReminderTime
+
+            val newHabit = Habit(
+                id = (currentData.habits.maxOfOrNull { it.id } ?: 0) + 1,
+                name = name.trim(),
+                schedule = buildScheduleLabel(normalizedType, sanitizedDays, targetPerWeek),
+                weight = weight,
+                isDailyQuest = false,
+                scheduleType = normalizedType,
+                customDays = sanitizedDays,
+                targetPerWeek = targetPerWeek.coerceIn(1, 7),
+                completionDates = emptyList(),
+                reminderEnabled = reminderEnabled,
+                reminderTime = sanitizedTime
+            ).normalizeForDate(LocalDate.now())
+
+            val updated = currentData.copy(habits = currentData.habits + newHabit)
+            repository.saveAppData(updated)
+            rescheduleHabitReminders(updated)
         }
     }
 
     fun updateHabit(id: Int, name: String, schedule: String, weight: Int) {
+        val inferred = inferScheduleFromText(schedule)
+        val current = appData.value?.habits?.find { it.id == id }
+        updateHabit(
+            id = id,
+            name = name,
+            weight = weight,
+            scheduleType = inferred.type,
+            customDays = inferred.customDays,
+            targetPerWeek = inferred.targetPerWeek,
+            reminderEnabled = current?.reminderEnabled ?: true,
+            reminderTime = current?.reminderTime
+        )
+    }
+
+    fun updateHabit(
+        id: Int,
+        name: String,
+        weight: Int,
+        scheduleType: HabitScheduleType,
+        customDays: List<Int>,
+        targetPerWeek: Int,
+        reminderEnabled: Boolean,
+        reminderTime: String?
+    ) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
-            val updatedHabits = currentData.habits.map {
-                if (it.id == id) {
-                    it.copy(name = name, schedule = schedule, weight = weight)
+            val today = LocalDate.now()
+
+            val normalizedType = normalizeScheduleType(scheduleType, customDays)
+            val sanitizedDays = customDays.distinct().sorted().filter { it in 1..7 }
+            val sanitizedTime = sanitizeReminderTime(reminderTime) ?: currentData.defaultReminderTime
+
+            val updatedHabits = currentData.habits.map { habit ->
+                if (habit.id == id) {
+                    habit.copy(
+                        name = name.trim(),
+                        weight = weight,
+                        scheduleType = normalizedType,
+                        customDays = sanitizedDays,
+                        targetPerWeek = targetPerWeek.coerceIn(1, 7),
+                        reminderEnabled = reminderEnabled,
+                        reminderTime = sanitizedTime,
+                        schedule = buildScheduleLabel(normalizedType, sanitizedDays, targetPerWeek)
+                    ).normalizeForDate(today)
                 } else {
-                    it
+                    habit
                 }
             }
-            repository.saveAppData(currentData.copy(habits = updatedHabits))
+
+            val updated = currentData.copy(habits = updatedHabits)
+            repository.saveAppData(updated)
+            rescheduleHabitReminders(updated)
         }
     }
 
@@ -240,71 +604,67 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                 newTotalXp -= habitToDelete.weight
                 newTotalHabitsCompleted -= 1
             }
-
             if (newTotalXp < 0) newTotalXp = 0
             if (newTotalHabitsCompleted < 0) newTotalHabitsCompleted = 0
 
             val updatedHabits = currentData.habits.filterNot { it.id == id }
             val newLevel = calculateLevel(newTotalXp)
-            repository.saveAppData(
-                currentData.copy(
-                    habits = updatedHabits,
-                    totalXp = newTotalXp,
-                    level = newLevel,
-                    totalHabitsCompleted = newTotalHabitsCompleted
-                )
+            val updated = currentData.copy(
+                habits = updatedHabits,
+                totalXp = newTotalXp,
+                level = newLevel,
+                totalHabitsCompleted = newTotalHabitsCompleted
             )
+            repository.saveAppData(updated)
+            rescheduleHabitReminders(updated)
         }
     }
 
-    // 🔥 LOGIC UTAMA: ONE-WAY CHECK (TIDAK BISA UNCHECK) 🔥
     fun toggleHabitCompleted(habitId: Int, isCompleted: Boolean) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
-
+            val today = LocalDate.now()
             val targetHabit = currentData.habits.find { it.id == habitId } ?: return@launch
+            val normalizedTarget = migrateLegacySchedule(targetHabit).normalizeForDate(today)
 
-            // CEGAH UNCHECK:
-            if (targetHabit.isCompleted && !isCompleted) {
-                return@launch
-            }
+            if (!normalizedTarget.isDueOn(today)) return@launch
+            if (!isCompleted) return@launch
+            if (normalizedTarget.isCompleted) return@launch
 
-            var newTotalXp = currentData.totalXp
-            var newTotalHabitsCompleted = currentData.totalHabitsCompleted
+            var newTotalXp = currentData.totalXp + normalizedTarget.weight
+            var newTotalHabitsCompleted = currentData.totalHabitsCompleted + 1
             val currentHistory = currentData.history.toMutableList()
 
             val updatedHabits = currentData.habits.map { habit ->
                 if (habit.id == habitId) {
-                    // Jika user mencentang (dari False ke True)
-                    if (isCompleted && !habit.isCompleted) {
-                        newTotalXp += habit.weight
-                        newTotalHabitsCompleted += 1
+                    val updatedDates = (habit.completionDates + today.toString()).distinct().sorted()
+                    val updatedHabit = habit.copy(
+                        completionDates = updatedDates,
+                        isCompleted = true,
+                        schedule = if (habit.isDailyQuest) habit.schedule else habit.scheduleLabel()
+                    )
 
-                        // Catat ke History
-                        currentHistory.add(
-                            HabitHistoryItem(
-                                id = UUID.randomUUID().toString(),
-                                habitName = habit.name,
-                                xpEarned = habit.weight,
-                                timestamp = System.currentTimeMillis()
-                            )
-                        )
-                        habit.copy(isCompleted = true)
-                    } else {
-                        habit
-                    }
+                    if (habit.isDailyQuest) updatedHabit else updatedHabit.normalizeForDate(today)
                 } else {
                     habit
                 }
             }
 
+            currentHistory.add(
+                HabitHistoryItem(
+                    id = UUID.randomUUID().toString(),
+                    habitId = normalizedTarget.id,
+                    habitName = normalizedTarget.name,
+                    xpEarned = normalizedTarget.weight,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+
             if (newTotalXp < 0) newTotalXp = 0
             if (newTotalHabitsCompleted < 0) newTotalHabitsCompleted = 0
 
             val newLevel = calculateLevel(newTotalXp)
-            val allHabitsCompleted = updatedHabits.isNotEmpty() && updatedHabits.all { it.isCompleted }
-
-            val dataWithNewProgress = currentData.copy(
+            var finalData = currentData.copy(
                 habits = updatedHabits,
                 totalXp = newTotalXp,
                 level = newLevel,
@@ -312,64 +672,414 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                 history = currentHistory
             )
 
-            val finalData = if (allHabitsCompleted) {
-                checkStreaks(dataWithNewProgress)
-            } else {
-                dataWithNewProgress
+            val dueHabits = updatedHabits.filter { !it.isDailyQuest && it.isDueOn(today) }
+            if (dueHabits.isNotEmpty() && dueHabits.all { it.isCompleted }) {
+                finalData = checkStreaks(finalData, today)
             }
 
             repository.saveAppData(finalData)
         }
     }
 
-    private fun checkStreaks(currentData: AppData): AppData {
-        val today = Calendar.getInstance()
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val todayStr = dateFormat.format(today.time)
+    private fun checkStreaks(currentData: AppData, today: LocalDate): AppData {
+        val todayStr = today.toString()
+        if (todayStr == currentData.lastCompletionDate) return currentData
 
-        if (todayStr == currentData.lastCompletionDate) {
-            return currentData
-        }
-
-        val yesterday = Calendar.getInstance().apply { add(Calendar.DATE, -1) }
-        val yesterdayStr = dateFormat.format(yesterday.time)
-
-        val newStreak = if (currentData.lastCompletionDate == yesterdayStr) {
-            currentData.streak + 1
-        } else {
-            1
-        }
-        val newLastCompletionDate = todayStr
-
-        return currentData.copy(
-            streak = newStreak,
-            lastCompletionDate = newLastCompletionDate
-        )
-    }
-
-    private fun calculateLevel(totalXp: Int): Int {
-        return (totalXp / 100) + 1
+        val yesterdayStr = today.minusDays(1).toString()
+        val newStreak = if (currentData.lastCompletionDate == yesterdayStr) currentData.streak + 1 else 1
+        return currentData.copy(streak = newStreak, lastCompletionDate = todayStr)
     }
 
     fun getXpProgress(): Pair<Int, Int> {
         val totalXp = appData.value?.totalXp ?: 0
         val currentLevelXp = (appData.value?.level?.minus(1) ?: 0) * 100
-        val progress = totalXp - currentLevelXp
-        return Pair(progress, 100)
+        return Pair(totalXp - currentLevelXp, 100)
     }
 
     fun scheduleDailyReminder(context: Context) {
-        val reminderRequest = PeriodicWorkRequestBuilder<HabitReminderWorker>(3, TimeUnit.DAYS)
-            .build()
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val updated = if (currentData.isReminderEnabled) {
+                currentData
+            } else {
+                val changed = currentData.copy(isReminderEnabled = true)
+                repository.saveAppData(changed)
+                changed
+            }
+            rescheduleHabitReminders(updated)
+        }
+    }
 
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            "daily_habit_reminder",
-            ExistingPeriodicWorkPolicy.KEEP,
-            reminderRequest
+    fun refreshReminderSchedulesIfEnabled() {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            if (currentData.isReminderEnabled) {
+                rescheduleHabitReminders(currentData)
+            }
+        }
+    }
+
+    fun getBackupJson(): String {
+        return appData.value?.toJson() ?: ""
+    }
+
+    fun restoreFromBackup(jsonString: String): Boolean {
+        return try {
+            val restoredData = AppData.fromJson(jsonString)
+            if (restoredData.level >= 1) {
+                viewModelScope.launch {
+                    val migrated = restoredData.copy(
+                        habits = restoredData.habits.map { migrateLegacySchedule(it).normalizeForDate(LocalDate.now()) }
+                    )
+                    repository.saveAppData(migrated)
+                    rescheduleHabitReminders(migrated)
+                }
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun calculateLevel(totalXp: Int): Int = (totalXp / 100) + 1
+
+    private suspend fun saveCustomProfileImage(uri: Uri): Boolean {
+        return runCatching {
+            val sourceBitmap = appContext.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input)
+            } ?: return false
+
+            val maxSide = 1024
+            val width = sourceBitmap.width.coerceAtLeast(1)
+            val height = sourceBitmap.height.coerceAtLeast(1)
+            val scale = minOf(maxSide.toFloat() / width.toFloat(), maxSide.toFloat() / height.toFloat(), 1f)
+            val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+            val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+
+            val finalBitmap = if (targetWidth != width || targetHeight != height) {
+                Bitmap.createScaledBitmap(sourceBitmap, targetWidth, targetHeight, true)
+            } else {
+                sourceBitmap
+            }
+
+            val dir = File(appContext.filesDir, "profile_images").apply { mkdirs() }
+            val file = File(dir, "custom_profile.jpg")
+            FileOutputStream(file).use { output ->
+                finalBitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)
+            }
+
+            if (finalBitmap !== sourceBitmap) {
+                finalBitmap.recycle()
+            }
+            sourceBitmap.recycle()
+
+            val currentData = appData.value ?: repository.getCurrentAppData()
+            repository.saveAppData(
+                currentData.copy(customProfileImagePath = file.absolutePath)
+            )
+            true
+        }.getOrElse { false }
+    }
+
+    private fun calculateLoginStreakIndex(lastLoginDate: String, currentStreakIndex: Int, today: LocalDate): Int {
+        val lastDate = parseLocalDate(lastLoginDate) ?: return 0
+        val diffDays = ChronoUnit.DAYS.between(lastDate, today)
+        val next = if (diffDays == 1L) currentStreakIndex + 1 else 0
+        return if (next >= 7) 0 else next
+    }
+
+    private fun createDailyQuest(maxId: Int): Habit? {
+        val sideQuestTemplate = predefinedHabitTemplates
+            .find { it.first == "Tantangan (Side Quest)" }
+            ?.second
+            ?.randomOrNull()
+            ?: return null
+
+        return Habit(
+            id = maxId + 1,
+            name = "⭐ ${sideQuestTemplate.name}",
+            schedule = "Misi Spesial Hari Ini",
+            weight = sideQuestTemplate.weight + 50,
+            isCompleted = false,
+            scheduleType = HabitScheduleType.DAILY,
+            reminderEnabled = false,
+            reminderTime = null,
+            isDailyQuest = true
         )
     }
 
-    // --- FUNGSI GENERATE ACHIEVEMENT ---
+    private fun migrateLegacySchedule(habit: Habit): Habit {
+        if (habit.isDailyQuest) return habit
+
+        val alreadyConfigured = habit.scheduleType != HabitScheduleType.DAILY ||
+            habit.customDays.isNotEmpty() ||
+            habit.targetPerWeek != 3
+        if (alreadyConfigured) {
+            return habit.copy(schedule = habit.scheduleLabel())
+        }
+
+        val inferred = inferScheduleFromText(habit.schedule)
+        return habit.copy(
+            scheduleType = inferred.type,
+            customDays = inferred.customDays,
+            targetPerWeek = inferred.targetPerWeek,
+            schedule = buildScheduleLabel(inferred.type, inferred.customDays, inferred.targetPerWeek)
+        )
+    }
+
+    private fun inferScheduleFromText(scheduleText: String): ScheduleConfig {
+        val text = scheduleText.lowercase().trim()
+
+        val targetMatch = Regex("(\\d+)\\s*x").find(text)
+        if (targetMatch != null && text.contains("minggu")) {
+            val target = targetMatch.groupValues[1].toIntOrNull()?.coerceIn(1, 7) ?: 3
+            return ScheduleConfig(HabitScheduleType.TIMES_PER_WEEK, targetPerWeek = target)
+        }
+
+        if ((text.contains("senin") && text.contains("jumat")) || text.contains("weekday")) {
+            return ScheduleConfig(HabitScheduleType.WEEKDAYS)
+        }
+
+        val customDays = listOf(
+            "senin" to 1,
+            "selasa" to 2,
+            "rabu" to 3,
+            "kamis" to 4,
+            "jumat" to 5,
+            "sabtu" to 6,
+            "minggu" to 7
+        ).filter { (name, _) -> text.contains(name) }
+            .map { it.second }
+            .distinct()
+            .sorted()
+
+        if (customDays.isNotEmpty()) {
+            return ScheduleConfig(HabitScheduleType.CUSTOM_DAYS, customDays = customDays)
+        }
+
+        return ScheduleConfig(HabitScheduleType.DAILY)
+    }
+
+    private fun normalizeScheduleType(scheduleType: HabitScheduleType, customDays: List<Int>): HabitScheduleType {
+        return if (scheduleType == HabitScheduleType.CUSTOM_DAYS && customDays.isEmpty()) {
+            HabitScheduleType.DAILY
+        } else {
+            scheduleType
+        }
+    }
+
+    private fun buildScheduleLabel(
+        scheduleType: HabitScheduleType,
+        customDays: List<Int>,
+        targetPerWeek: Int
+    ): String {
+        return when (normalizeScheduleType(scheduleType, customDays)) {
+            HabitScheduleType.DAILY -> "Setiap Hari"
+            HabitScheduleType.WEEKDAYS -> "Senin-Jumat"
+            HabitScheduleType.TIMES_PER_WEEK -> "${targetPerWeek.coerceIn(1, 7)}x / Minggu"
+            HabitScheduleType.CUSTOM_DAYS -> {
+                customDays
+                    .distinct()
+                    .sorted()
+                    .joinToString(", ") { dayToLongName(it) }
+                    .ifBlank { "Setiap Hari" }
+            }
+        }
+    }
+
+    private fun dayToLongName(day: Int): String {
+        return when (day) {
+            1 -> "Senin"
+            2 -> "Selasa"
+            3 -> "Rabu"
+            4 -> "Kamis"
+            5 -> "Jumat"
+            6 -> "Sabtu"
+            7 -> "Minggu"
+            else -> "-"
+        }
+    }
+
+    private fun sanitizeReminderTime(time: String?): String? {
+        val trimmed = time?.trim() ?: return null
+        return if (TIME_PATTERN.matches(trimmed)) trimmed else null
+    }
+
+    private fun rescheduleHabitReminders(data: AppData) {
+        val workManager = WorkManager.getInstance(appContext)
+        workManager.cancelAllWorkByTag(REMINDER_TAG)
+        workManager.cancelAllWorkByTag(SNOOZE_REMINDER_TAG)
+        workManager.cancelAllWorkByTag(TIME_SLOT_REMINDER_TAG)
+
+        if (!data.isReminderEnabled) return
+
+        val timeSlots = listOf("06:00", "09:00", "12:00", "15:00", "18:00", "21:00")
+
+        timeSlots.forEachIndexed { index, time ->
+            val label = "Pengingat $time"
+            val notificationId = 8200 + index
+            val initialDelayMillis = calculateInitialDelayMillis(time)
+            val request = PeriodicWorkRequestBuilder<TimeSlotReminderWorker>(24, TimeUnit.HOURS)
+                .setInitialDelay(initialDelayMillis, TimeUnit.MILLISECONDS)
+                .setInputData(
+                    workDataOf(
+                        TimeSlotReminderWorker.KEY_SLOT_LABEL to label,
+                        TimeSlotReminderWorker.KEY_NOTIFICATION_ID to notificationId
+                    )
+                )
+                .addTag(REMINDER_TAG)
+                .addTag(TIME_SLOT_REMINDER_TAG)
+                .build()
+
+            workManager.enqueueUniquePeriodicWork(
+                "time_slot_reminder_${time.replace(':', '_')}",
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request
+            )
+        }
+    }
+
+    private fun calculateInitialDelayMillis(time: String): Long {
+        val parsedTime = try {
+            LocalTime.parse(time)
+        } catch (_: DateTimeParseException) {
+            LocalTime.of(20, 0)
+        }
+
+        val now = LocalDateTime.now()
+        var triggerAt = now.toLocalDate().atTime(parsedTime)
+        if (!triggerAt.isAfter(now)) {
+            triggerAt = triggerAt.plusDays(1)
+        }
+
+        return Duration.between(now, triggerAt).toMillis().coerceAtLeast(TimeUnit.MINUTES.toMillis(1))
+    }
+
+    private fun parseLocalDate(value: String): LocalDate? {
+        return try {
+            if (value.isBlank()) null else LocalDate.parse(value)
+        } catch (_: DateTimeParseException) {
+            null
+        }
+    }
+
+    private fun buildWeeklySummary(data: AppData): WeeklySummary {
+        val today = LocalDate.now()
+        val weekStart = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val weekEnd = weekStart.plusDays(6)
+        val nextWeekStart = weekStart.plusWeeks(1)
+        val nextWeekEnd = nextWeekStart.plusDays(6)
+        val dateFormatter = DateTimeFormatter.ofPattern("dd MMM", Locale.forLanguageTag("id-ID"))
+
+        val trackedHabits = data.habits
+            .filterNot { it.isDailyQuest }
+            .map { migrateLegacySchedule(it).normalizeForDate(today) }
+
+        var dueThisWeek = 0
+        var completedThisWeek = 0
+        val missedCountByHabit = mutableMapOf<String, Int>()
+
+        trackedHabits.forEach { habit ->
+            var missedCount = 0
+            var cursor = weekStart
+            while (!cursor.isAfter(today)) {
+                if (habit.isDueOn(cursor)) {
+                    dueThisWeek += 1
+                    val completedOnDay = habit.completionDates.any { it == cursor.toString() }
+                    if (completedOnDay) {
+                        completedThisWeek += 1
+                    } else {
+                        missedCount += 1
+                    }
+                }
+                cursor = cursor.plusDays(1)
+            }
+            missedCountByHabit[habit.name] = missedCount
+        }
+
+        val mostMissed = missedCountByHabit.maxByOrNull { it.value }
+        val mostMissedName = if ((mostMissed?.value ?: 0) > 0) {
+            mostMissed?.key ?: "-"
+        } else {
+            "Belum ada habit bolong"
+        }
+        val mostMissedCount = mostMissed?.value ?: 0
+
+        val bestStreakDays = calculateBestCompletionStreak(data.history)
+        val nextWeekDueCount = calculateDueCountInRange(trackedHabits, nextWeekStart, nextWeekEnd)
+        val nextWeekTarget = when {
+            nextWeekDueCount == 0 -> 0
+            completedThisWeek == 0 -> minOf(3, nextWeekDueCount)
+            else -> (completedThisWeek + 1).coerceAtMost(nextWeekDueCount).coerceAtLeast(1)
+        }
+        val completionRate = if (dueThisWeek > 0) {
+            completedThisWeek.toFloat() / dueThisWeek.toFloat()
+        } else {
+            0f
+        }
+
+        return WeeklySummary(
+            weekLabel = "${weekStart.format(dateFormatter)} - ${weekEnd.format(dateFormatter)}",
+            completedThisWeek = completedThisWeek,
+            dueThisWeek = dueThisWeek,
+            completionRate = completionRate,
+            mostMissedHabitName = mostMissedName,
+            mostMissedCount = mostMissedCount,
+            bestStreakDays = bestStreakDays,
+            nextWeekTarget = nextWeekTarget,
+            nextWeekDueCount = nextWeekDueCount
+        )
+    }
+
+    private fun calculateBestCompletionStreak(history: List<HabitHistoryItem>): Int {
+        if (history.isEmpty()) return 0
+
+        val dates = history
+            .asSequence()
+            .map {
+                Instant.ofEpochMilli(it.timestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+            }
+            .distinct()
+            .sorted()
+            .toList()
+
+        if (dates.isEmpty()) return 0
+
+        var best = 1
+        var current = 1
+
+        for (index in 1 until dates.size) {
+            val previous = dates[index - 1]
+            val currentDate = dates[index]
+            if (ChronoUnit.DAYS.between(previous, currentDate) == 1L) {
+                current += 1
+                if (current > best) best = current
+            } else {
+                current = 1
+            }
+        }
+
+        return best
+    }
+
+    private fun calculateDueCountInRange(habits: List<Habit>, startDate: LocalDate, endDate: LocalDate): Int {
+        var count = 0
+        habits.forEach { habit ->
+            var cursor = startDate
+            while (!cursor.isAfter(endDate)) {
+                if (habit.isDueOn(cursor)) {
+                    count += 1
+                }
+                cursor = cursor.plusDays(1)
+            }
+        }
+        return count
+    }
+
     private fun getAllAchievements(
         level: Int,
         streak: Int,
@@ -377,26 +1087,17 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         totalHabitsCompleted: Int
     ): List<Achievement> {
         val allAchievements = mutableListOf<Achievement>()
-
-        // KATEGORI 1: Level Achievements
         allAchievements.add(Achievement("level_5", "Kekuatan Baru", "Tunjukkan potensimu dan capai Level 5.", R.drawable.level5, level >= 5, minOf(level, 5), 5))
         allAchievements.add(Achievement("level_10", "Pejuang Tangguh", "Disiplin adalah senjatamu. Capai Level 10.", R.drawable.level10, level >= 10, minOf(level, 10), 10))
         allAchievements.add(Achievement("level_20", "Legenda Hidup", "Kamu telah menguasai dirimu. Capai Level 20.", R.drawable.level20, level >= 20, minOf(level, 20), 20))
-
-        // KATEGORI 2: Streak Achievements
         allAchievements.add(Achievement("streak_3", "Api Mulai Menyala", "Jaga apinya tetap menyala selama 3 hari beruntun.", R.drawable.streak3, streak >= 3, minOf(streak, 3), 3))
         allAchievements.add(Achievement("streak_7", "Kekuatan Kebiasaan", "Kamu tak terhentikan! Selesaikan 7 hari streak.", R.drawable.streak7, streak >= 7, minOf(streak, 7), 7))
         allAchievements.add(Achievement("streak_30", "Penguasa Waktu", "Satu bulan penuh dedikasi. Capai 30 hari streak.", R.drawable.streak30, streak >= 30, minOf(streak, 30), 30))
-
-        // KATEGORI 3: Total XP Achievements
         allAchievements.add(Achievement("xp_1000", "Pemburu Poin", "Setiap poin berharga. Kumpulkan 1000 total XP.", R.drawable.xp1000, totalXp >= 1000, minOf(totalXp, 1000), 1000))
         allAchievements.add(Achievement("xp_5000", "Veteran Elit", "Hanya untuk yang terkuat. Kumpulkan 5000 total XP.", R.drawable.xp5000, totalXp >= 5000, minOf(totalXp, 5000), 5000))
-
-        // KATEGORI 4: Total Habits Completed
         allAchievements.add(Achievement("habits_1", "Awal Perjalanan", "Perjalanan seribu mil dimulai dengan satu misi.", R.drawable.misi1, totalHabitsCompleted >= 1, minOf(totalHabitsCompleted, 1), 1))
         allAchievements.add(Achievement("habits_50", "Ksatria Produktif", "Terus maju! Selesaikan 50 total misi.", R.drawable.misi50, totalHabitsCompleted >= 50, minOf(totalHabitsCompleted, 50), 50))
         allAchievements.add(Achievement("habits_200", "Sang Penakluk Misi", "Tidak ada misi yang terlalu sulit. Selesaikan 200 misi.", R.drawable.misi200, totalHabitsCompleted >= 200, minOf(totalHabitsCompleted, 200), 200))
-
         return allAchievements.sortedWith(compareBy({ it.isUnlocked }, { !(it.progress > 0 && !it.isUnlocked) }))
     }
 }

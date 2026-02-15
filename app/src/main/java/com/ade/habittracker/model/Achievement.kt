@@ -1,5 +1,6 @@
 package com.ade.habittracker.model
 
+import androidx.annotation.DrawableRes
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -7,11 +8,13 @@ data class Achievement(
     val id: String,
     val title: String,
     val description: String,
-    // KITA UBAH INI: Dari ImageVector ke Int (Resource ID)
-    // Kita hapus @Transient karena Int bisa disimpan ke JSON
-    val iconResId: Int,
+
+    // 🔥 Variable Gambar (Pastikan namanya imageResId, BUKAN iconResId)
+    @DrawableRes val imageResId: Int,
 
     val isUnlocked: Boolean = false,
     val progress: Int = 0,
-    val goal: Int = 1
+
+    // 🔥 Variable Target (Pastikan namanya target, BUKAN goal)
+    val target: Int = 1
 )

@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -43,7 +45,8 @@ import com.ade.habittracker.ui.viewmodel.AvatarItem
 fun AvatarPickerSheet(
     avatarList: List<Pair<AvatarItem, Boolean>>, // Terima List Pair (Avatar, isUnlocked)
     currentAvatarId: String,
-    onAvatarSelected: (String) -> Unit
+    onAvatarSelected: (String) -> Unit,
+    onPickFromGallery: () -> Unit
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 100.dp),
@@ -53,6 +56,21 @@ fun AvatarPickerSheet(
         modifier = Modifier.padding(bottom = 16.dp)
     ) {
         // Judul
+        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+            Button(
+                onClick = onPickFromGallery,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AccentYellow,
+                    contentColor = Color.Black
+                ),
+                modifier = Modifier
+                    .padding(bottom = 12.dp)
+                    .height(44.dp)
+            ) {
+                Text("Pilih Foto Dari Galeri", fontWeight = FontWeight.Bold)
+            }
+        }
+
         item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
             Text(
                 text = "Pilih Avatar",

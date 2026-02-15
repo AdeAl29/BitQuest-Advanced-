@@ -1,6 +1,5 @@
 package com.ade.habittracker
 
-import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
@@ -17,7 +16,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.ade.habittracker.data.HabitRepository
+import com.ade.habittracker.data.ShopRepository
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 
 class SplashActivity : ComponentActivity() {
 
@@ -29,10 +34,15 @@ class SplashActivity : ComponentActivity() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        val splashResId = runBlocking {
+            runCatching {
+                val appData = HabitRepository(applicationContext).appData.first()
+                ShopRepository.getSplashResById(appData?.activeSplashVideo ?: "splash_default")
+            }.getOrDefault(R.raw.splash_video)
+        }
 
         setContent {
-            // Langsung panggil VideoSplashScreen (Video Default)
-            VideoSplashScreen {
+            VideoSplashScreen(videoResId = splashResId) {
                 // Saat video selesai/skip, jalankan pengecekan login
                 checkLoginAndNavigate()
             }
@@ -43,9 +53,9 @@ class SplashActivity : ComponentActivity() {
         // Mencegah pemanggilan ganda jika activity sudah mau tutup
         if (isFinishing) return
 
-        // Cek data session di memori HP (Shared Preferences)
-        val sharedPref = getSharedPreferences("user_session", Context.MODE_PRIVATE)
-        val isLoggedIn = sharedPref.getBoolean("is_logged_in", false) // Default false
+        val firebaseReady = FirebaseApp.initializeApp(this) != null
+        val user = if (firebaseReady) FirebaseAuth.getInstance().currentUser else null
+        val isLoggedIn = user != null && user.isEmailVerified
 
         if (isLoggedIn) {
             // Jika sudah login, langsung ke menu utama
@@ -61,11 +71,14 @@ class SplashActivity : ComponentActivity() {
 }
 
 @Composable
-fun VideoSplashScreen(onVideoEnded: () -> Unit) {
+fun VideoSplashScreen(
+    videoResId: Int,
+    onVideoEnded: () -> Unit
+) {
     val context = LocalContext.current
 
     // 🔥 Menggunakan Video Default (Karena pengaturan splash dihapus)
-    val videoUri = Uri.parse("android.resource://${context.packageName}/${R.raw.splash_video}")
+    val videoUri = Uri.parse("android.resource://${context.packageName}/$videoResId")
 
     LaunchedEffect(key1 = true) {
         // Timer pengaman (max 5 detik skip otomatis jika video macet)

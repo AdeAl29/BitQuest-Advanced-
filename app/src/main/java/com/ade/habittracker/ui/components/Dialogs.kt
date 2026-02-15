@@ -1,11 +1,17 @@
 package com.ade.habittracker.ui.components
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -16,12 +22,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.ade.habittracker.model.Achievement
 import com.ade.habittracker.ui.theme.AccentYellow
 import com.ade.habittracker.ui.theme.CardBackground
@@ -39,23 +50,55 @@ fun AchievementDescriptionDialog(
         onDismissRequest = onDismiss,
         containerColor = CardBackground,
         title = {
-            Text(
-                text = achievement.title,
-                color = if (achievement.isUnlocked) AccentYellow else TextColorPrimary,
-                fontWeight = FontWeight.Bold
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // 🔥 TAMBAHAN: Menampilkan Icon Badge di Dialog
+                if (achievement.isUnlocked) {
+                    Image(
+                        painter = painterResource(id = achievement.imageResId),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(64.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Locked",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = achievement.title,
+                    color = if (achievement.isUnlocked) AccentYellow else TextColorPrimary,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
         },
         text = {
-            Column {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text(
                     text = achievement.description,
-                    color = TextColorSecondary
+                    color = TextColorSecondary,
+                    textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(16.dp))
+
+                // 🔥 PERBAIKAN: Menggunakan 'target' bukan 'goal'
                 Text(
-                    text = "Progress: ${achievement.progress} / ${achievement.goal}",
+                    text = "Progress: ${achievement.progress} / ${achievement.target}",
                     color = if (achievement.isUnlocked) AccentYellow else TextColorPrimary,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 18.sp
                 )
             }
         },

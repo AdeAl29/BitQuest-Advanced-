@@ -1,10 +1,14 @@
-package com.ade.habittracker.ui.navigation
+﻿package com.ade.habittracker.ui.navigation
 
 import android.widget.Toast
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -18,19 +22,57 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.EmojiEvents
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -46,22 +88,47 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.ade.habittracker.data.ShopRepository
 import com.ade.habittracker.data.predefinedHabitTemplates
 import com.ade.habittracker.model.Habit
+import com.ade.habittracker.ui.components.DailyLoginDialog
 import com.ade.habittracker.ui.components.DeleteConfirmationDialog
 import com.ade.habittracker.ui.components.EditNameDialog
-import com.ade.habittracker.ui.components.sheets.*
+import com.ade.habittracker.ui.components.RamadhanCalmBackground
+import com.ade.habittracker.ui.components.RamadhanFestiveBackground
+import com.ade.habittracker.ui.components.TopEventBanner
+import com.ade.habittracker.ui.components.sheets.AddOptionsSheet
+import com.ade.habittracker.ui.components.sheets.AvatarPickerSheet
+import com.ade.habittracker.ui.components.sheets.ManualAddHabitSheet
+import com.ade.habittracker.ui.components.sheets.TemplateHabitSheet
+import com.ade.habittracker.ui.components.sheets.TitlePickerSheet
 import com.ade.habittracker.ui.screens.AchievementsScreen
 import com.ade.habittracker.ui.screens.HabitsScreen
+import com.ade.habittracker.ui.screens.ShopScreen
 import com.ade.habittracker.ui.screens.StatsScreen
+import com.ade.habittracker.ui.theme.AccentYellow
 import com.ade.habittracker.ui.theme.CardBackground
 import com.ade.habittracker.ui.theme.DarkBackground
+import com.ade.habittracker.ui.theme.ErrorColor
 import com.ade.habittracker.ui.theme.PrimaryColor
 import com.ade.habittracker.ui.theme.TextColorPrimary
 import com.ade.habittracker.ui.theme.TextColorSecondary
 import com.ade.habittracker.ui.viewmodel.HabitViewModel
+import com.ade.habittracker.widget.HabitHomeWidgetProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private data class TopBannerEvent(
+    val title: String,
+    val message: String,
+    val icon: ImageVector,
+    val iconTint: Color,
+    val highlightText: String? = null
+)
+
+private const val PAGE_TRANSITION_DURATION_MS = 420
+private const val UI_TRANSITION_DURATION_MS = 280
+private const val IDLE_TRANSITION_DURATION_MS = 420
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -71,7 +138,14 @@ fun MainScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val contentResolver = context.contentResolver
     val appData by viewModel.appData.collectAsStateWithLifecycle()
+    val dailyReward by viewModel.dailyRewardState.collectAsStateWithLifecycle()
+    val achievements by viewModel.achievements.collectAsStateWithLifecycle()
+    val activeChibiRes = ShopRepository.getChibiResById(appData?.activeChibiSkin ?: "chibi_helper")
+    val activeThemeId = appData?.activeTheme ?: "theme_default"
+    val isRamadhanCalmTheme = activeThemeId == "theme_ramadhan"
+    val isRamadhanFestiveTheme = activeThemeId == "theme_ramadhan_festive"
 
     val pagerState = rememberPagerState(pageCount = { 3 })
 
@@ -80,6 +154,7 @@ fun MainScreen(
     var showManualAddSheet by remember { mutableStateOf(false) }
     var showTemplateSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showShopSheet by remember { mutableStateOf(false) }
 
     var habitToEdit by remember { mutableStateOf<Habit?>(null) }
     var habitToDelete by remember { mutableStateOf<Habit?>(null) }
@@ -90,6 +165,54 @@ fun MainScreen(
     // --- IDLE DETECTION ---
     var isUserIdle by remember { mutableStateOf(false) }
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val topBannerQueue = remember { mutableStateListOf<TopBannerEvent>() }
+    var activeTopBanner by remember { mutableStateOf<TopBannerEvent?>(null) }
+    var sessionShownAchievementIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val pageScrollAnimationSpec = remember {
+        tween<Float>(
+            durationMillis = PAGE_TRANSITION_DURATION_MS,
+            easing = FastOutSlowInEasing
+        )
+    }
+
+    fun enqueueTopBanner(event: TopBannerEvent) {
+        if (topBannerQueue.size >= 6) {
+            topBannerQueue.removeAt(0)
+        }
+        topBannerQueue.add(event)
+    }
+
+    LaunchedEffect(activeTopBanner, topBannerQueue.size) {
+        if (activeTopBanner == null && topBannerQueue.isNotEmpty()) {
+            activeTopBanner = topBannerQueue.removeAt(0)
+        }
+    }
+
+    LaunchedEffect(achievements, appData?.shownAchievementBannerIds) {
+        val alreadyShownIds = appData?.shownAchievementBannerIds?.toSet().orEmpty()
+        val newlyUnlocked = achievements.filter {
+            it.isUnlocked &&
+                it.id !in alreadyShownIds &&
+                it.id !in sessionShownAchievementIds
+        }
+        if (newlyUnlocked.isEmpty()) return@LaunchedEffect
+
+        newlyUnlocked.forEach { achievement ->
+            enqueueTopBanner(
+                TopBannerEvent(
+                    title = "Achievement Terbuka!",
+                    message = achievement.title,
+                    icon = Icons.Default.EmojiEvents,
+                    iconTint = AccentYellow,
+                    highlightText = "Baru"
+                )
+            )
+        }
+
+        val newIds = newlyUnlocked.map { it.id }.toSet()
+        sessionShownAchievementIds = sessionShownAchievementIds + newIds
+        viewModel.markAchievementsBannerShown(newIds)
+    }
 
     LaunchedEffect(lastInteractionTime) {
         isUserIdle = false
@@ -97,11 +220,75 @@ fun MainScreen(
         isUserIdle = true
     }
 
+    LaunchedEffect(appData) {
+        HabitHomeWidgetProvider.refreshAll(context)
+    }
+
+    // --- DATA EXPORT / IMPORT LAUNCHERS ---
+
+    // 1. Export (Backup) Launcher
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    val jsonString = viewModel.getBackupJson()
+                    contentResolver.openOutputStream(it)?.use { outputStream ->
+                        outputStream.write(jsonString.toByteArray())
+                    }
+                    Toast.makeText(context, "Backup berhasil disimpan!", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Gagal menyimpan backup: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    // 2. Import (Restore) Launcher
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    contentResolver.openInputStream(it)?.use { inputStream ->
+                        val jsonString = inputStream.bufferedReader().readText()
+                        val success = viewModel.restoreFromBackup(jsonString)
+                        if (success) {
+                            Toast.makeText(context, "Data berhasil dipulihkan!", Toast.LENGTH_SHORT).show()
+                            // Refresh UI / Restart Activity logic if needed, but StateFlow should handle it
+                        } else {
+                            Toast.makeText(context, "File backup tidak valid atau rusak.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Gagal membaca file: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    val profilePhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        viewModel.importCustomProfileImage(uri) { success ->
+            if (success) {
+                Toast.makeText(context, "Foto profil berhasil diperbarui.", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Gagal memuat foto dari galeri.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // --- CONTAINER UTAMA ---
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(MaterialTheme.colorScheme.background)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(pass = PointerEventPass.Initial)
@@ -110,8 +297,22 @@ fun MainScreen(
                 }
             }
     ) {
+        if (isRamadhanCalmTheme) {
+            RamadhanCalmBackground(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.95f)
+            )
+        }
+        if (isRamadhanFestiveTheme) {
+            RamadhanFestiveBackground(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.95f)
+            )
+        }
 
-        // 1. HORIZONTAL PAGER (SWIPE LAYAR)
+        // 1. HORIZONTAL PAGER (KONTEN UTAMA)
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize()
@@ -120,16 +321,31 @@ fun MainScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
-                    .padding(bottom = 100.dp)
             ) {
                 when (page) {
                     0 -> {
                         HabitsScreen(
                             habits = appData?.habits ?: emptyList(),
-                            // 🔥 Pass Status Chibi (Nyala/Mati)
+                            userName = appData?.userName ?: "Petualang",
+                            chibiRes = activeChibiRes,
                             isChibiEnabled = appData?.isChibiEnabled ?: true,
+                            isChibiVoiceEnabled = appData?.isChibiVoiceEnabled ?: true,
                             onHabitCheckedChanged = { habit, isChecked ->
+                                if (isChecked && !habit.isCompleted) {
+                                    enqueueTopBanner(
+                                        TopBannerEvent(
+                                            title = "Misi Selesai",
+                                            message = habit.name,
+                                            icon = Icons.Default.CheckCircle,
+                                            iconTint = PrimaryColor,
+                                            highlightText = "+${habit.weight} XP"
+                                        )
+                                    )
+                                }
                                 viewModel.toggleHabitCompleted(habit.id, isChecked)
+                            },
+                            onReminderToggle = { habit, enabled ->
+                                viewModel.setHabitReminderEnabled(habit.id, enabled)
                             },
                             onEditClick = { habit ->
                                 habitToEdit = habit
@@ -150,7 +366,10 @@ fun MainScreen(
                             userName = appData?.userName ?: "Petualang",
                             userTitle = appData?.userTitle ?: "Baru",
                             profileImageResId = viewModel.profileImageResId.collectAsStateWithLifecycle().value,
-                            onScheduleReminderClick = onScheduleReminderClick,
+                            customProfileImagePath = appData?.customProfileImagePath,
+                            chibiRes = activeChibiRes,
+                            isChibiEnabled = appData?.isChibiEnabled ?: true,
+                            isChibiVoiceEnabled = appData?.isChibiVoiceEnabled ?: true,
                             onNameClick = { showNameEditDialog = true },
                             onAvatarClick = { showAvatarPickerSheet = true },
                             onTitleClick = { showTitlePickerSheet = true },
@@ -159,20 +378,33 @@ fun MainScreen(
                     }
                     2 -> {
                         AchievementsScreen(
-                            achievements = viewModel.achievements.collectAsStateWithLifecycle().value
+                            achievements = achievements,
+                            userName = appData?.userName ?: "Petualang",
+                            chibiRes = activeChibiRes,
+                            isChibiEnabled = appData?.isChibiEnabled ?: true,
+                            isChibiVoiceEnabled = appData?.isChibiVoiceEnabled ?: true
                         )
                     }
                 }
             }
         }
 
-        // 2. TOMBOL FLOAT (SETTINGS & ADD)
-        val fabScale by animateFloatAsState(if (isUserIdle) 0f else 1f, label = "fabScale")
+        // 2. TOMBOL FLOAT (FAB)
+        val fabScale by animateFloatAsState(
+            targetValue = if (isUserIdle) 0f else 1f,
+            animationSpec = tween(
+                durationMillis = UI_TRANSITION_DURATION_MS,
+                easing = FastOutSlowInEasing
+            ),
+            label = "fabScale"
+        )
 
         AnimatedVisibility(
             visible = pagerState.currentPage == 0,
-            enter = scaleIn() + fadeIn(),
-            exit = scaleOut() + fadeOut(),
+            enter = scaleIn(
+                animationSpec = tween(UI_TRANSITION_DURATION_MS, easing = FastOutSlowInEasing)
+            ) + fadeIn(animationSpec = tween(UI_TRANSITION_DURATION_MS)),
+            exit = scaleOut(animationSpec = tween(220)) + fadeOut(animationSpec = tween(180)),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
@@ -180,8 +412,6 @@ fun MainScreen(
                 .scale(fabScale)
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-
-                // 🔥 Tombol Pengaturan (Besar) 🔥
                 FloatingActionButton(
                     onClick = { showSettingsSheet = true },
                     containerColor = CardBackground,
@@ -193,11 +423,10 @@ fun MainScreen(
                     Icon(Icons.Filled.Settings, "Set")
                 }
 
-                // Tombol Tambah (+)
                 FloatingActionButton(
                     onClick = { showAddOptionsSheet = true },
-                    containerColor = PrimaryColor,
-                    contentColor = Color.White,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     shape = CircleShape,
                     elevation = FloatingActionButtonDefaults.elevation(8.dp)
                 ) {
@@ -211,51 +440,125 @@ fun MainScreen(
             selectedIndex = pagerState.currentPage,
             isIdle = isUserIdle,
             onItemSelected = { index ->
-                scope.launch { pagerState.animateScrollToPage(index) }
+                scope.launch {
+                    pagerState.animateScrollToPage(index, animationSpec = pageScrollAnimationSpec)
+                }
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(bottom = 10.dp, start = 20.dp, end = 20.dp)
         )
-    }
 
-    // --- MODAL SHEETS & DIALOGS ---
-
-    // 1. Settings Sheet (Musik & Chibi Toggle)
-    if (showSettingsSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showSettingsSheet = false },
-            containerColor = DarkBackground
-        ) {
-            SettingsSheet(
-                isMusicEnabled = appData?.isMusicEnabled ?: true,
-                onMusicToggle = { viewModel.setMusicEnabled(it) },
-                // 🔥 Parameter Chibi Toggle
-                isChibiEnabled = appData?.isChibiEnabled ?: true,
-                onChibiToggle = { viewModel.setChibiEnabled(it) }
+        activeTopBanner?.let { banner ->
+            TopEventBanner(
+                title = banner.title,
+                message = banner.message,
+                icon = banner.icon,
+                iconTint = banner.iconTint,
+                highlightText = banner.highlightText,
+                onDismiss = { activeTopBanner = null }
             )
         }
     }
 
-    // 2. Dialog Edit Nama
+    // --- MODAL SHEETS & DIALOGS ---
+
+    dailyReward?.let { reward ->
+        DailyLoginDialog(
+            currentDayIndex = appData?.loginStreakIndex ?: 0,
+            rewardToday = reward,
+            onClaim = { viewModel.claimDailyReward() }
+        )
+    }
+
+    if (showSettingsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettingsSheet = false },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            SettingsSheet(
+                isMusicEnabled = appData?.isMusicEnabled ?: true,
+                onMusicToggle = { viewModel.setMusicEnabled(it) },
+                isChibiEnabled = appData?.isChibiEnabled ?: true,
+                onChibiToggle = { viewModel.setChibiEnabled(it) },
+                isChibiVoiceEnabled = appData?.isChibiVoiceEnabled ?: true,
+                onChibiVoiceToggle = { viewModel.setChibiVoiceEnabled(it) },
+                isReminderEnabled = appData?.isReminderEnabled ?: false,
+                onReminderToggle = { enabled ->
+                    viewModel.setReminderEnabled(enabled)
+                    if (enabled) {
+                        onScheduleReminderClick()
+                    }
+                },
+                defaultReminderTime = appData?.defaultReminderTime ?: "20:00",
+                onReminderTimeChange = { time -> viewModel.updateDefaultReminderTime(time) },
+                onOpenShop = {
+                    showSettingsSheet = false
+                    showShopSheet = true
+                },
+                onScheduleNotification = {
+                    onScheduleReminderClick()
+                    Toast.makeText(context, "Notifikasi Harian Diaktifkan!", Toast.LENGTH_SHORT).show()
+                },
+                onBackupData = {
+                    // Pemicu Export
+                    val fileName = "HabitTracker_Backup_${System.currentTimeMillis()}.json"
+                    exportLauncher.launch(fileName)
+                },
+                onRestoreData = {
+                    // Pemicu Import
+                    importLauncher.launch(arrayOf("application/json"))
+                },
+                onLogout = {
+                    showSettingsSheet = false
+                    viewModel.logout()
+                }
+            )
+        }
+    }
+
+    if (showShopSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showShopSheet = false },
+            containerColor = MaterialTheme.colorScheme.background,
+            modifier = Modifier.fillMaxHeight()
+        ) {
+            appData?.let { data ->
+                ShopScreen(
+                    appData = data,
+                    onBuy = { viewModel.buyItem(it) },
+                    onEquip = { viewModel.equipItem(it) }
+                )
+            }
+        }
+    }
+
     if (showNameEditDialog) {
         val userName by viewModel.userName.collectAsStateWithLifecycle()
         EditNameDialog(userName, { showNameEditDialog = false }) { viewModel.updateUserName(it) }
     }
 
-    // 3. Avatar Picker
     if (showAvatarPickerSheet) {
         val avatarList by viewModel.avatarListWithLockStatus.collectAsStateWithLifecycle()
-        ModalBottomSheet(onDismissRequest = { showAvatarPickerSheet = false }, containerColor = DarkBackground) {
-            AvatarPickerSheet(avatarList, appData?.profileImageId ?: "avatar_level1") {
-                viewModel.updateProfileImageId(it)
-                scope.launch { showAvatarPickerSheet = false }
-            }
+        ModalBottomSheet(onDismissRequest = { showAvatarPickerSheet = false }, containerColor = CardBackground) {
+            AvatarPickerSheet(
+                avatarList = avatarList,
+                currentAvatarId = appData?.profileImageId ?: "avatar_level1",
+                onAvatarSelected = {
+                    viewModel.updateProfileImageId(it)
+                    scope.launch { showAvatarPickerSheet = false }
+                },
+                onPickFromGallery = {
+                    showAvatarPickerSheet = false
+                    profilePhotoLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }
+            )
         }
     }
 
-    // 4. Title Picker
     if (showTitlePickerSheet) {
         val titleList by viewModel.titleListWithLockStatus.collectAsStateWithLifecycle()
         val currentTitle by viewModel.userTitle.collectAsStateWithLifecycle()
@@ -267,7 +570,6 @@ fun MainScreen(
         }
     }
 
-    // 5. Add Options
     if (showAddOptionsSheet) {
         ModalBottomSheet(onDismissRequest = { showAddOptionsSheet = false }, containerColor = CardBackground) {
             AddOptionsSheet(
@@ -277,20 +579,43 @@ fun MainScreen(
         }
     }
 
-    // 6. Manual Add/Edit
     if (showManualAddSheet) {
         ModalBottomSheet(onDismissRequest = { showManualAddSheet = false }, containerColor = CardBackground) {
-            ManualAddHabitSheet(habitToEdit, { name, sched, w ->
+            ManualAddHabitSheet(
+                habitToEdit = habitToEdit,
+                defaultReminderTime = appData?.defaultReminderTime ?: "20:00",
+                onConfirm = { name, weight, scheduleType, customDays, targetPerWeek, reminderEnabled, reminderTime ->
                 scope.launch {
-                    if (habitToEdit == null) viewModel.addHabit(name, sched, w)
-                    else viewModel.updateHabit(habitToEdit!!.id, name, sched, w)
+                    if (habitToEdit == null) {
+                        viewModel.addHabit(
+                            name = name,
+                            weight = weight,
+                            scheduleType = scheduleType,
+                            customDays = customDays,
+                            targetPerWeek = targetPerWeek,
+                            reminderEnabled = reminderEnabled,
+                            reminderTime = reminderTime
+                        )
+                    } else {
+                        viewModel.updateHabit(
+                            id = habitToEdit!!.id,
+                            name = name,
+                            weight = weight,
+                            scheduleType = scheduleType,
+                            customDays = customDays,
+                            targetPerWeek = targetPerWeek,
+                            reminderEnabled = reminderEnabled,
+                            reminderTime = reminderTime
+                        )
+                    }
                     showManualAddSheet = false
                 }
-            }, { scope.launch { showManualAddSheet = false } })
+            },
+                onCancel = { scope.launch { showManualAddSheet = false } }
+            )
         }
     }
 
-    // 7. Template Add
     if (showTemplateSheet) {
         ModalBottomSheet(onDismissRequest = { showTemplateSheet = false }, containerColor = DarkBackground) {
             TemplateHabitSheet(predefinedHabitTemplates) { t ->
@@ -300,7 +625,6 @@ fun MainScreen(
         }
     }
 
-    // 8. Delete Dialog
     if (habitToDelete != null) {
         DeleteConfirmationDialog(habitToDelete!!.name, {
             viewModel.deleteHabit(habitToDelete!!.id)
@@ -309,14 +633,27 @@ fun MainScreen(
     }
 }
 
-// ─── SETTINGS SHEET (SEDERHANA: MUSIK & CHIBI) ───
+// â”€â”€â”€ SETTINGS SHEET (UPDATED) â”€â”€â”€
 @Composable
 fun SettingsSheet(
     isMusicEnabled: Boolean,
     onMusicToggle: (Boolean) -> Unit,
     isChibiEnabled: Boolean,
-    onChibiToggle: (Boolean) -> Unit
+    onChibiToggle: (Boolean) -> Unit,
+    isChibiVoiceEnabled: Boolean,
+    onChibiVoiceToggle: (Boolean) -> Unit,
+    isReminderEnabled: Boolean,
+    onReminderToggle: (Boolean) -> Unit,
+    defaultReminderTime: String,
+    onReminderTimeChange: (String) -> Unit,
+    onOpenShop: () -> Unit,
+    onScheduleNotification: () -> Unit,
+    onBackupData: () -> Unit, // Parameter Baru
+    onRestoreData: () -> Unit, // Parameter Baru
+    onLogout: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -326,7 +663,7 @@ fun SettingsSheet(
         Text("Pengaturan", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextColorPrimary)
         Spacer(Modifier.height(24.dp))
 
-        // 1. Musik Latar Switch
+        // --- SECTION AUDIO & VISUAL ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -336,16 +673,11 @@ fun SettingsSheet(
             Switch(
                 checked = isMusicEnabled,
                 onCheckedChange = onMusicToggle,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = PrimaryColor,
-                    checkedTrackColor = PrimaryColor.copy(alpha = 0.3f)
-                )
+                colors = SwitchDefaults.colors(checkedThumbColor = PrimaryColor, checkedTrackColor = PrimaryColor.copy(alpha = 0.3f))
             )
         }
+        HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 12.dp))
 
-        Divider(color = Color.Gray.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 16.dp))
-
-        // 2. Tampilkan Chibi Switch
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -355,46 +687,132 @@ fun SettingsSheet(
             Switch(
                 checked = isChibiEnabled,
                 onCheckedChange = onChibiToggle,
+                colors = SwitchDefaults.colors(checkedThumbColor = PrimaryColor, checkedTrackColor = PrimaryColor.copy(alpha = 0.3f))
+            )
+        }
+        HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Suara Asisten Chibi", color = TextColorSecondary, fontSize = 16.sp)
+            Switch(
+                checked = isChibiVoiceEnabled,
+                onCheckedChange = onChibiVoiceToggle,
+                colors = SwitchDefaults.colors(checkedThumbColor = PrimaryColor, checkedTrackColor = PrimaryColor.copy(alpha = 0.3f))
+            )
+        }
+        HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Aktifkan Reminder", color = TextColorSecondary, fontSize = 16.sp)
+            Switch(
+                checked = isReminderEnabled,
+                onCheckedChange = onReminderToggle,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = PrimaryColor,
                     checkedTrackColor = PrimaryColor.copy(alpha = 0.3f)
                 )
             )
         }
+        HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 12.dp))
 
-        // Splash Screen Settings sudah dihapus total
-    }
-}
+        if (isReminderEnabled) {
+            Button(
+                onClick = { onScheduleNotification() },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardBackground, contentColor = TextColorPrimary)
+            ) {
+                Icon(Icons.Default.Notifications, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Reminder aktif: tiap 3 jam (06,09,12,15,18,21)", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(12.dp))
+        }
 
-// ─── CUSTOM CHIP (Backup jika butuh) ───
-@Composable
-fun CustomSettingsChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        color = if (selected) PrimaryColor else CardBackground,
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, if (selected) PrimaryColor else TextColorSecondary.copy(alpha = 0.5f)),
-        modifier = Modifier.height(36.dp)
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.padding(horizontal = 16.dp)
+        // --- SECTION FITUR ---
+        Button(
+            onClick = onOpenShop,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary, contentColor = Color.Black)
         ) {
-            Text(
-                text = label,
-                fontSize = 14.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = if (selected) Color.White else TextColorSecondary
-            )
+            Icon(Icons.Default.ShoppingCart, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Buka Toko & Ganti Tema", fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Button(
+            onClick = onScheduleNotification,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CardBackground, contentColor = PrimaryColor),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryColor.copy(alpha = 0.5f))
+        ) {
+            Icon(Icons.Default.Notifications, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Sinkronkan Reminder Sekarang", fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // --- SECTION MANAJEMEN DATA (BARU) ---
+        Text("Manajemen Data", fontSize = 14.sp, color = TextColorSecondary, modifier = Modifier.padding(vertical = 8.dp))
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Tombol Backup
+            Button(
+                onClick = onBackupData,
+                modifier = Modifier.weight(1f).height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardBackground, contentColor = TextColorPrimary)
+            ) {
+                // Menggunakan Icon Save sebagai representasi Backup
+                Icon(Icons.Filled.Save, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Backup", fontSize = 13.sp)
+            }
+
+            // Tombol Restore
+            Button(
+                onClick = onRestoreData,
+                modifier = Modifier.weight(1f).height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardBackground, contentColor = TextColorPrimary)
+            ) {
+                // Menggunakan Icon Refresh/Restore
+                Icon(Icons.Filled.Refresh, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Restore", fontSize = 13.sp)
+            }
+        }
+
+        HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 16.dp))
+
+        // --- SECTION AKUN ---
+        Button(
+            onClick = onLogout,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = ErrorColor, contentColor = Color.White)
+        ) {
+            Icon(Icons.AutoMirrored.Filled.ExitToApp, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Keluar", fontWeight = FontWeight.Bold)
         }
     }
 }
 
-// ─── GLASS MENU ───
+// â”€â”€â”€ GLASS MENU â”€â”€â”€
 @Composable
 fun GlassBottomNavigation(
     selectedIndex: Int,
@@ -403,15 +821,26 @@ fun GlassBottomNavigation(
     modifier: Modifier = Modifier
 ) {
     val items = listOf(
-        Triple(0, Icons.Filled.List, "Habits"),
+        Triple(0, Icons.AutoMirrored.Filled.List, "Habits"),
         Triple(1, Icons.Filled.BarChart, "Stats"),
         Triple(2, Icons.Filled.EmojiEvents, "Prestasi")
     )
 
-    // Animasi
-    val animatedScale by animateFloatAsState(if (isIdle) 0.85f else 1f, tween(500), label = "scale")
-    val animatedAlpha by animateFloatAsState(if (isIdle) 0.4f else 0.95f, tween(500), label = "alpha")
-    val animatedWidthFraction by animateFloatAsState(if (isIdle) 0.6f else 1f, tween(500), label = "width")
+    val animatedScale by animateFloatAsState(
+        targetValue = if (isIdle) 0.85f else 1f,
+        animationSpec = tween(IDLE_TRANSITION_DURATION_MS, easing = FastOutSlowInEasing),
+        label = "scale"
+    )
+    val animatedAlpha by animateFloatAsState(
+        targetValue = if (isIdle) 0.4f else 0.95f,
+        animationSpec = tween(IDLE_TRANSITION_DURATION_MS),
+        label = "alpha"
+    )
+    val animatedWidthFraction by animateFloatAsState(
+        targetValue = if (isIdle) 0.6f else 1f,
+        animationSpec = tween(IDLE_TRANSITION_DURATION_MS, easing = FastOutSlowInEasing),
+        label = "width"
+    )
 
     Box(
         modifier = modifier.fillMaxWidth(),
@@ -440,9 +869,11 @@ fun GlassBottomNavigation(
             ) {
                 items.forEach { (index, icon, label) ->
                     val isSelected = selectedIndex == index
+                    val targetColor = if (isSelected) MaterialTheme.colorScheme.primary else TextColorSecondary.copy(alpha = 0.6f)
                     val iconColor by animateColorAsState(
-                        if (isSelected) PrimaryColor else TextColorSecondary.copy(alpha = 0.6f),
-                        tween(300), label = "iconColor"
+                        targetColor,
+                        tween(durationMillis = UI_TRANSITION_DURATION_MS),
+                        label = "iconColor"
                     )
 
                     Column(
@@ -454,8 +885,14 @@ fun GlassBottomNavigation(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Icon(icon, label, tint = iconColor, modifier = Modifier.size(26.dp))
-                        AnimatedVisibility(visible = isSelected && !isIdle, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
-                            Box(modifier = Modifier.padding(top = 4.dp).size(4.dp).background(PrimaryColor, CircleShape))
+                        AnimatedVisibility(
+                            visible = isSelected && !isIdle,
+                            enter = scaleIn(
+                                animationSpec = tween(UI_TRANSITION_DURATION_MS, easing = FastOutSlowInEasing)
+                            ) + fadeIn(animationSpec = tween(UI_TRANSITION_DURATION_MS)),
+                            exit = scaleOut(animationSpec = tween(180)) + fadeOut(animationSpec = tween(150))
+                        ) {
+                            Box(modifier = Modifier.padding(top = 4.dp).size(4.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
                         }
                     }
                 }
@@ -463,3 +900,5 @@ fun GlassBottomNavigation(
         }
     }
 }
+
+

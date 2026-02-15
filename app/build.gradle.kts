@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.23"
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -90,6 +91,13 @@ dependencies {
 
     // Coil (pilih SATU, jangan dua)
     implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // Firebase Auth (hanya untuk login/register)
+    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
+    implementation("com.google.firebase:firebase-auth-ktx")
+
+    // Biometric unlock
+    implementation("androidx.biometric:biometric:1.1.0")
 
     // Unit Test
     testImplementation(libs.junit)

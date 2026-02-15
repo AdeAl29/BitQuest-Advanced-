@@ -1,62 +1,81 @@
-package com.ade.habittracker.model
+﻿package com.ade.habittracker.model
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-// 1. Data Class untuk Misi (Habit)
+@Serializable
+enum class HabitScheduleType {
+    DAILY,
+    WEEKDAYS,
+    TIMES_PER_WEEK,
+    CUSTOM_DAYS
+}
+
 @Serializable
 data class Habit(
     val id: Int,
     val name: String,
     val schedule: String,
     val weight: Int,
-    val isCompleted: Boolean = false
+    val isCompleted: Boolean = false,
+    val scheduleType: HabitScheduleType = HabitScheduleType.DAILY,
+    val customDays: List<Int> = emptyList(), // ISO day number (1 = Monday, 7 = Sunday)
+    val targetPerWeek: Int = 3, // Used when scheduleType == TIMES_PER_WEEK
+    val completionDates: List<String> = emptyList(), // yyyy-MM-dd
+    val reminderEnabled: Boolean = true,
+    val reminderTime: String? = null, // HH:mm
+    val isDailyQuest: Boolean = false
 )
 
-// 2. Data Class untuk Riwayat Petualangan (History Log)
 @Serializable
 data class HabitHistoryItem(
-    val id: String,         // ID unik (UUID)
-    val habitName: String,  // Nama misi yang diselesaikan
-    val xpEarned: Int,      // XP yang didapat
-    val timestamp: Long     // Waktu penyelesaian (System.currentTimeMillis)
+    val id: String,
+    val habitId: Int = -1,
+    val habitName: String,
+    val xpEarned: Int,
+    val timestamp: Long
 )
 
-// 3. Data Class Utama Aplikasi (AppData)
 @Serializable
 data class AppData(
-    // --- Profil User ---
     val userName: String = "Petualang",
     val userTitle: String = "Petualang Baru",
     val profileImageId: String = "avatar_level1",
-
-    // --- Statistik RPG ---
+    val customProfileImagePath: String? = null,
+    val isLoggedIn: Boolean = false,
     val level: Int = 1,
     val totalXp: Int = 0,
     val streak: Int = 0,
     val totalHabitsCompleted: Int = 0,
-
-    // 🔥 DATA TOTAL LOGIN 🔥
-    val totalLoginDays: Int = 1, // Default 1 (Dihitung sejak hari pertama install)
-
-    // --- Logika Tanggal ---
-    val lastCompletionDate: String = "",    // Format: yyyy-MM-dd (Harian)
-    val lastResetDate: String = "",         // Format: yyyy-MM-dd (Harian)
-
-    // 🔥 DATA RESET BULANAN 🔥
-    val lastMonthlyResetDate: String = "",  // Format: yyyy-MM (Untuk cek ganti bulan)
-
-    // 🔥 PENGATURAN APLIKASI (SETTINGS) - UPDATE 🔥
-    val isMusicEnabled: Boolean = true, // Status Musik (Nyala/Mati)
-    val isChibiEnabled: Boolean = true, // Status Chibi (Nyala/Mati) - Sekarang Boolean
-
-    // --- Daftar Data ---
+    val coins: Int = 0,
+    val totalLoginDays: Int = 1,
+    val loginStreakIndex: Int = 0,
+    val tickets: Int = 0,
+    val ownedThemes: List<String> = listOf("theme_default"),
+    val activeTheme: String = "theme_default",
+    val ownedMusic: List<String> = listOf("music_default"),
+    val activeMusic: String = "music_default",
+    val ownedChibiSkins: List<String> = listOf("chibi_helper"),
+    val activeChibiSkin: String = "chibi_helper",
+    val ownedSplashVideos: List<String> = listOf("splash_default"),
+    val activeSplashVideo: String = "splash_default",
+    val shownAchievementBannerIds: List<String> = emptyList(),
+    val equippedBadges: Map<Int, String> = emptyMap(),
+    val lastCompletionDate: String = "", // yyyy-MM-dd
+    val lastResetDate: String = "", // yyyy-MM-dd
+    val lastLoginDate: String = "", // yyyy-MM-dd
+    val lastMonthlyResetDate: String = "", // yyyy-MM
+    val isMusicEnabled: Boolean = true,
+    val isChibiEnabled: Boolean = true,
+    val isChibiVoiceEnabled: Boolean = true,
+    val isReminderEnabled: Boolean = false,
+    val defaultReminderTime: String = "20:00",
+    val reminderSnoozeMinutes: Int = 15,
     val habits: List<Habit> = emptyList(),
     val history: List<HabitHistoryItem> = emptyList()
 ) {
-    // Fungsi Helper untuk Simpan ke JSON
     fun toJson(): String {
         val jsonConfig = Json {
             prettyPrint = true
@@ -67,17 +86,15 @@ data class AppData(
     }
 
     companion object {
-        // Fungsi Helper untuk Baca dari JSON
         fun fromJson(jsonString: String): AppData {
             val jsonConfig = Json {
-                ignoreUnknownKeys = true // PENTING: Agar tidak crash jika ada field baru/lama beda
+                ignoreUnknownKeys = true
                 coerceInputValues = true
-                encodeDefaults = true // Penting agar field baru terisi default jika data lama belum punya
+                encodeDefaults = true
             }
             return try {
                 jsonConfig.decodeFromString(jsonString)
-            } catch (e: Exception) {
-                // Jika data rusak/kosong, kembalikan data default
+            } catch (_: Exception) {
                 AppData()
             }
         }

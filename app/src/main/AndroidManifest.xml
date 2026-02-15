@@ -38,6 +38,22 @@
             android:theme="@style/Theme.HabitTracker"
             android:windowSoftInputMode="adjustResize" />
 
+        <receiver
+            android:name=".notification.ReminderActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".widget.HabitHomeWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/habit_home_widget_info" />
+        </receiver>
+
     </application>
 
 </manifest>

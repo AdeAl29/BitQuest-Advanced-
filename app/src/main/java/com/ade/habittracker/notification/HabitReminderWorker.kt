@@ -1,4 +1,4 @@
-package com.ade.habittracker.notification
+﻿package com.ade.habittracker.notification
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,7 +11,12 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.ade.habittracker.MainActivity
 import com.ade.habittracker.R
-import kotlin.random.Random
+import com.ade.habittracker.data.HabitRepository
+import com.ade.habittracker.model.isDueOn
+import com.ade.habittracker.model.normalizeForDate
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import java.time.LocalDate
 
 class HabitReminderWorker(
     private val context: Context,
@@ -19,96 +24,130 @@ class HabitReminderWorker(
 ) : Worker(context, workerParams) {
 
     override fun doWork(): Result {
-        sendReminderNotification()
+        val habitId = inputData.getInt(KEY_HABIT_ID, -1)
+        if (habitId < 0) return Result.success()
+
+        val appData = runBlocking {
+            HabitRepository(context).appData.first()
+        } ?: return Result.success()
+
+        if (!appData.isReminderEnabled) return Result.success()
+
+        val today = LocalDate.now()
+        val habit = appData.habits
+            .firstOrNull { it.id == habitId && !it.isDailyQuest }
+            ?.normalizeForDate(today)
+            ?: return Result.success()
+
+        if (!habit.reminderEnabled) return Result.success()
+        if (!habit.isDueOn(today)) return Result.success()
+        if (habit.isCompleted) return Result.success()
+
+        sendReminderNotification(
+            habitId = habit.id,
+            displayName = sanitizeDisplayName(appData.userName),
+            habitName = habit.name,
+            habitWeight = habit.weight,
+            schedule = habit.schedule,
+            snoozeMinutes = appData.reminderSnoozeMinutes.coerceIn(5, 120),
+            isSnooze = inputData.getBoolean(KEY_IS_SNOOZE, false)
+        )
+
         return Result.success()
     }
 
-    private fun sendReminderNotification() {
+    private fun sendReminderNotification(
+        habitId: Int,
+        displayName: String,
+        habitName: String,
+        habitWeight: Int,
+        schedule: String,
+        snoozeMinutes: Int,
+        isSnooze: Boolean
+    ) {
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        val channelId = "habit_reminder_channel"
+        createChannel(notificationManager)
 
-        // 👉 intent buka app saat notif ditekan
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val appIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
 
-        val pendingIntent = PendingIntent.getActivity(
+        val appPendingIntent = PendingIntent.getActivity(
             context,
-            0,
-            intent,
+            habitId,
+            appIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // ======================
-        // FIRST TIME CHECK
-        // ======================
-        val isFirstTime = NotificationPreference.isFirstTime(context)
+        val snoozeIntent = Intent(context, ReminderActionReceiver::class.java).apply {
+            action = ACTION_SNOOZE
+            putExtra(KEY_HABIT_ID, habitId)
+            putExtra(EXTRA_SNOOZE_MINUTES, snoozeMinutes)
+        }
 
-        val title: String
-        val message: String
+        val snoozePendingIntent = PendingIntent.getBroadcast(
+            context,
+            habitId + 10_000,
+            snoozeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
-        if (isFirstTime) {
-            title = "Selamat Datang! 🎉"
-            message =
-                "Perjalanan barumu dimulai hari ini. Satu habit kecil, satu langkah besar."
-
-            NotificationPreference.setNotFirstTime(context)
+        val shortHabit = trimLabel(habitName, 26)
+        val title = if (isSnooze) {
+            "$displayName, lanjutkan: $shortHabit"
         } else {
-            val titles = listOf(
-                "Misi Hari Ini Menunggu ☀️",
-                "Jangan Kendur 🔥",
-                "XP Menunggumu ⚔️",
-                "Masih Ada Waktu ⏳",
-                "Disiplin Dikit Lagi 💪",
-                "Avatar-mu Butuh Progress 😤",
-                "Satu Habit Saja 🎯",
-                "Hari Ini Jangan Kosong 📜"
-            )
-
-            val messages = listOf(
-                "Kerjakan satu habit. Satu itu cukup.",
-                "Streak-mu terlalu berharga buat dihentikan.",
-                "Sedikit progres hari ini lebih baik daripada nol.",
-                "Bukan soal mood. Ini soal komitmen.",
-                "XP tidak datang sendiri.",
-                "Hari ini masih bisa diselamatkan.",
-                "Jangan nunggu semangat, mulai aja dulu.",
-                "Satu checklist lagi, habis itu bebas."
-            )
-
-            title = titles.random()
-            message = messages.random()
+            "$displayName, waktunya: $shortHabit"
         }
+        val message = "Target +$habitWeight XP. Jadwal $schedule, gas sekarang biar streak aman."
 
-        // ======================
-        // NOTIFICATION CHANNEL
-        // ======================
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "Habit Reminders",
-                NotificationManager.IMPORTANCE_HIGH // 🔥 PASTI MUNCUL
-            ).apply {
-                description = "Pengingat habit harian"
-            }
-            notificationManager.createNotificationChannel(channel)
-        }
-
-        // ======================
-        // BUILD NOTIFICATION
-        // ======================
-        val notification = NotificationCompat.Builder(context, channelId)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.icon)
             .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(appPendingIntent)
             .setAutoCancel(true)
+            .addAction(0, "Snooze ${snoozeMinutes}m", snoozePendingIntent)
             .build()
 
-        notificationManager.notify(Random.nextInt(), notification)
+        notificationManager.notify(habitId, notification)
+    }
+
+    private fun createChannel(notificationManager: NotificationManager) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Habit Reminders",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Pengingat habit berdasarkan jadwal"
+        }
+        notificationManager.createNotificationChannel(channel)
+    }
+
+    companion object {
+        const val KEY_HABIT_ID = "habit_id"
+        const val KEY_IS_SNOOZE = "is_snooze"
+        const val EXTRA_SNOOZE_MINUTES = "extra_snooze_minutes"
+        const val ACTION_SNOOZE = "com.ade.habittracker.action.SNOOZE"
+        const val CHANNEL_ID = "habit_reminder_channel"
+    }
+
+    private fun sanitizeDisplayName(rawName: String?): String {
+        val trimmed = rawName?.trim().orEmpty()
+        if (trimmed.isBlank() || trimmed.equals("petualang", ignoreCase = true)) {
+            return "Petualang"
+        }
+        return trimmed
+    }
+
+    private fun trimLabel(text: String, maxLength: Int): String {
+        if (text.length <= maxLength) return text
+        if (maxLength <= 1) return text.take(1)
+        return text.take(maxLength - 1) + "..."
     }
 }
