@@ -2,6 +2,7 @@ package com.ade.habittracker
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Patterns
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -94,7 +95,7 @@ class LoginActivity : FragmentActivity() {
                         hasAutoNavigated = true
                         val user = firebaseAuth.currentUser
                         if (user?.isEmailVerified == true) {
-                            viewModel.onAuthenticated(user.uid)
+                            viewModel.onAuthenticated()
                             goToMainActivityWithBiometric()
                         } else {
                             user?.sendEmailVerification()
@@ -166,28 +167,31 @@ class LoginActivity : FragmentActivity() {
                             val suggestedName = username.ifBlank {
                                 email.substringBefore("@").ifBlank { "Petualang" }
                             }
-                            viewModel.onAuthenticated(
-                                userId = currentUser.uid,
-                                suggestedUserName = suggestedName
-                            )
+                            viewModel.onAuthenticated(suggestedUserName = suggestedName)
                             goToMainActivityWithBiometric()
                         }
                     },
                     onForgotPassword = { email ->
                         if (!isLoginServiceReady || isLoading) return@LoginScreen
-                        if (email.isBlank()) {
+                        val normalizedEmail = normalizeEmail(email)
+
+                        if (normalizedEmail.isBlank()) {
                             Toast.makeText(this@LoginActivity, "Isi email dulu untuk reset password.", Toast.LENGTH_SHORT).show()
+                            return@LoginScreen
+                        }
+                        if (!isValidEmail(normalizedEmail)) {
+                            Toast.makeText(this@LoginActivity, "Format email belum valid.", Toast.LENGTH_SHORT).show()
                             return@LoginScreen
                         }
 
                         isLoading = true
-                        firebaseAuth.sendPasswordResetEmail(email)
+                        firebaseAuth.sendPasswordResetEmail(normalizedEmail)
                             .addOnCompleteListener(this@LoginActivity) { result ->
                                 isLoading = false
                                 if (result.isSuccessful) {
                                     Toast.makeText(
                                         this@LoginActivity,
-                                        "Link reset password sudah dikirim ke email.",
+                                        "Link reset password sudah dikirim. Cek inbox atau folder spam email.",
                                         Toast.LENGTH_LONG
                                     ).show()
                                 } else {
@@ -427,11 +431,15 @@ fun LoginScreen(
 
                 Button(
                     onClick = {
-                        val normalizedEmail = email.trim()
+                        val normalizedEmail = normalizeEmail(email)
                         val normalizedUsername = username.trim()
 
                         if (normalizedEmail.isBlank() || password.isBlank()) {
                             Toast.makeText(context, "Email dan password wajib diisi.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        if (!isValidEmail(normalizedEmail)) {
+                            Toast.makeText(context, "Format email belum valid.", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
                         if (isRegisterMode && normalizedUsername.isBlank()) {
@@ -534,4 +542,12 @@ private fun authErrorMessage(error: Exception?): String {
         is FirebaseTooManyRequestsException -> "Terlalu banyak percobaan. Coba lagi nanti."
         else -> error?.localizedMessage ?: "Autentikasi gagal."
     }
+}
+
+private fun normalizeEmail(email: String): String {
+    return email.trim().lowercase()
+}
+
+private fun isValidEmail(email: String): Boolean {
+    return Patterns.EMAIL_ADDRESS.matcher(email).matches()
 }

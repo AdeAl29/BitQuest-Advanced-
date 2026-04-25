@@ -12,7 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.MonetizationOn // 🔥 Icon Koin
+import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,20 +37,19 @@ import com.ade.habittracker.ui.theme.TextColorSecondary
 
 @Composable
 fun DailyLoginDialog(
-    currentDayIndex: Int, // 0 sampai 6 (Hari ke-1 sampai ke-7)
+    currentDayIndex: Int,
     rewardToday: DailyReward,
     onClaim: () -> Unit
 ) {
-    Dialog(onDismissRequest = {}) { // User tidak bisa menutup tanpa klaim
+    Dialog(onDismissRequest = {}) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.9f) // Lebar 90% layar
+                .fillMaxWidth(0.9f)
                 .clip(RoundedCornerShape(24.dp))
                 .background(CardBackground)
                 .border(1.dp, PrimaryColor.copy(alpha = 0.3f), RoundedCornerShape(24.dp))
-                .wrapContentHeight() // 🔥 Pas di tengah (Compact)
+                .wrapContentHeight()
         ) {
-            // Efek Gradient Background Halus
             Box(
                 modifier = Modifier
                     .matchParentSize()
@@ -66,7 +65,6 @@ fun DailyLoginDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                // --- HEADER ICON ---
                 Icon(
                     imageVector = Icons.Default.CalendarMonth,
                     contentDescription = null,
@@ -76,7 +74,6 @@ fun DailyLoginDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // --- TEXT HEADER ---
                 Text(
                     "Login Harian",
                     fontSize = 20.sp,
@@ -92,7 +89,6 @@ fun DailyLoginDialog(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // --- GRID HADIAH (4 Kolom) ---
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -104,7 +100,7 @@ fun DailyLoginDialog(
                     itemsIndexed(DailyRewardsConfig.REWARDS) { index, reward ->
                         val isToday = index == currentDayIndex
                         val isPast = index < currentDayIndex
-                        val isJackpot = index == 6 // Hari ke-7 (Jackpot)
+                        val isJackpot = index == 6
 
                         DayRewardItem(
                             reward = reward,
@@ -117,7 +113,6 @@ fun DailyLoginDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // --- INFO HADIAH HARI INI ---
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -145,7 +140,7 @@ fun DailyLoginDialog(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "+${rewardToday.coins} Coins", // 🔥 Tampilkan Koin
+                            text = "+${rewardToday.coins} Coins",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = AccentYellow
@@ -155,7 +150,6 @@ fun DailyLoginDialog(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // --- TOMBOL KLAIM ---
                 Button(
                     onClick = onClaim,
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryColor),
@@ -184,7 +178,6 @@ fun DayRewardItem(
     isPast: Boolean,
     isJackpot: Boolean
 ) {
-    // Animasi Scale "Berdenyut" untuk Hari Ini
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val scale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -196,7 +189,6 @@ fun DayRewardItem(
         label = "scale"
     )
 
-    // Warna Background & Border
     val bgColor = when {
         isToday -> PrimaryColor
         isPast -> PrimaryColor.copy(alpha = 0.2f)
@@ -227,8 +219,6 @@ fun DayRewardItem(
             .alpha(if (isPast) 0.6f else 1f)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-
-            // Indikator "Active" (Dot Merah)
             if (isToday) {
                 Box(
                     modifier = Modifier
@@ -239,7 +229,6 @@ fun DayRewardItem(
                 )
             }
 
-            // Konten Kotak
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -256,7 +245,6 @@ fun DayRewardItem(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // 🔥 Icon Koin di tengah
                 Icon(
                     imageVector = Icons.Default.MonetizationOn,
                     contentDescription = "Coin",
@@ -266,7 +254,6 @@ fun DayRewardItem(
 
                 Spacer(modifier = Modifier.height(2.dp))
 
-                // 🔥 Nominal Koin
                 Text(
                     text = "${reward.coins}",
                     fontSize = 12.sp,

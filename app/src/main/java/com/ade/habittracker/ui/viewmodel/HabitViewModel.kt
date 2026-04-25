@@ -17,9 +17,18 @@ import com.ade.habittracker.data.DailyReward
 import com.ade.habittracker.data.DailyRewardsConfig
 import com.ade.habittracker.data.HabitRepository
 import com.ade.habittracker.data.ShopItem
+import com.ade.habittracker.data.ShopRepository
 import com.ade.habittracker.data.ShopType
+import com.ade.habittracker.data.BundleItem
+import com.ade.habittracker.data.AssistantRoster
+import com.ade.habittracker.data.LuckySpinConfig
+import com.ade.habittracker.data.LuckySpinResult
+import com.ade.habittracker.data.LuckyRewardType
+import com.ade.habittracker.data.generateAssistantReply
 import com.ade.habittracker.data.predefinedHabitTemplates
 import com.ade.habittracker.model.Achievement
+import com.ade.habittracker.model.AssistantChatMessage
+import com.ade.habittracker.model.AssistantMessageSender
 import com.ade.habittracker.model.AppData
 import com.ade.habittracker.model.Habit
 import com.ade.habittracker.model.HabitHistoryItem
@@ -29,7 +38,6 @@ import com.ade.habittracker.model.normalizeForDate
 import com.ade.habittracker.model.scheduleLabel
 import com.ade.habittracker.notification.HabitReminderWorker
 import com.ade.habittracker.notification.TimeSlotReminderWorker
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +45,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
@@ -54,6 +64,7 @@ import java.io.FileOutputStream
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 private const val REMINDER_TAG = "habit_reminder"
 private const val SNOOZE_REMINDER_TAG = "habit_reminder_snooze"
@@ -81,6 +92,25 @@ data class WeeklySummary(
     val bestStreakDays: Int,
     val nextWeekTarget: Int,
     val nextWeekDueCount: Int
+)
+
+data class FocusTimerUiState(
+    val selectedDurationMinutes: Int = 25,
+    val remainingSeconds: Int = 25 * 60,
+    val isRunning: Boolean = false,
+    val lastCompletedDurationMinutes: Int = 0,
+    val lastEarnedXp: Int = 0,
+    val lastEarnedCoins: Int = 0,
+    val completionToken: Long = 0L
+)
+
+data class FocusSummary(
+    val dailyTargetSessions: Int = 4,
+    val sessionsCompletedToday: Int = 0,
+    val totalSessions: Int = 0,
+    val totalMinutes: Int = 0,
+    val currentStreakDays: Int = 0,
+    val bestStreakDays: Int = 0
 )
 
 private data class ScheduleConfig(
@@ -174,8 +204,18 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         data?.let { buildWeeklySummary(it) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    private val _focusTimerState = MutableStateFlow(FocusTimerUiState())
+    val focusTimerState: StateFlow<FocusTimerUiState> = _focusTimerState.asStateFlow()
+
+    val focusSummary: StateFlow<FocusSummary> = appData.map { data ->
+        buildFocusSummary(data)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FocusSummary())
+
     private val _dailyRewardState = MutableStateFlow<DailyReward?>(null)
     val dailyRewardState: StateFlow<DailyReward?> = _dailyRewardState.asStateFlow()
+    private val _luckySpinResultState = MutableStateFlow<LuckySpinResult?>(null)
+    val luckySpinResultState: StateFlow<LuckySpinResult?> = _luckySpinResultState.asStateFlow()
+    private var focusTimerJob: Job? = null
 
     fun equipBadge(slotIndex: Int, achievementId: String?) {
         viewModelScope.launch {
@@ -202,10 +242,6 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                         coins = newCoins,
                         ownedThemes = currentData.ownedThemes + item.id
                     )
-                    ShopType.MUSIC -> currentData.copy(
-                        coins = newCoins,
-                        ownedMusic = currentData.ownedMusic + item.id
-                    )
                     ShopType.AVATAR -> currentData.copy(coins = newCoins)
                     ShopType.CHIBI -> currentData.copy(
                         coins = newCoins,
@@ -215,6 +251,22 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                         coins = newCoins,
                         ownedSplashVideos = currentData.ownedSplashVideos + item.id
                     )
+                    ShopType.AVATAR_FRAME -> currentData.copy(
+                        coins = newCoins,
+                        ownedAvatarFrames = currentData.ownedAvatarFrames + item.id
+                    )
+                    ShopType.MISSION_CARD -> currentData.copy(
+                        coins = newCoins,
+                        ownedMissionCardSkins = currentData.ownedMissionCardSkins + item.id
+                    )
+                    ShopType.CHECKLIST_EFFECT -> currentData.copy(
+                        coins = newCoins,
+                        ownedChecklistEffects = currentData.ownedChecklistEffects + item.id
+                    )
+                    ShopType.BUNDLE -> {
+                        val bundle = item as? BundleItem ?: return@launch
+                        applyBundle(currentData.copy(coins = newCoins), bundle, equipNow = false)
+                    }
                 }
                 repository.saveAppData(updatedData)
             }
@@ -226,19 +278,231 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
             val currentData = appData.value ?: return@launch
             val updatedData = when (item.type) {
                 ShopType.THEME -> currentData.copy(activeTheme = item.id)
-                ShopType.MUSIC -> currentData.copy(activeMusic = item.id)
                 ShopType.AVATAR -> currentData.copy(profileImageId = item.id)
                 ShopType.CHIBI -> currentData.copy(activeChibiSkin = item.id)
                 ShopType.SPLASH -> currentData.copy(activeSplashVideo = item.id)
+                ShopType.AVATAR_FRAME -> currentData.copy(activeAvatarFrame = item.id)
+                ShopType.MISSION_CARD -> currentData.copy(activeMissionCardSkin = item.id)
+                ShopType.CHECKLIST_EFFECT -> currentData.copy(activeChecklistEffect = item.id)
+                ShopType.BUNDLE -> {
+                    val bundle = item as? BundleItem ?: return@launch
+                    applyBundle(currentData, bundle, equipNow = true)
+                }
             }
             repository.saveAppData(updatedData)
         }
     }
 
-    fun setMusicEnabled(isEnabled: Boolean) {
+    private fun applyBundle(data: AppData, bundle: BundleItem, equipNow: Boolean): AppData {
+        var updated = data
+        bundle.includedItemIds.forEach { id ->
+            when {
+                id.startsWith("theme_") -> {
+                    updated = updated.copy(
+                        ownedThemes = (updated.ownedThemes + id).distinct(),
+                        activeTheme = if (equipNow) id else updated.activeTheme
+                    )
+                }
+                id.startsWith("frame_") -> {
+                    updated = updated.copy(
+                        ownedAvatarFrames = (updated.ownedAvatarFrames + id).distinct(),
+                        activeAvatarFrame = if (equipNow) id else updated.activeAvatarFrame
+                    )
+                }
+                id.startsWith("mission_card_") -> {
+                    updated = updated.copy(
+                        ownedMissionCardSkins = (updated.ownedMissionCardSkins + id).distinct(),
+                        activeMissionCardSkin = if (equipNow) id else updated.activeMissionCardSkin
+                    )
+                }
+                id.startsWith("checklist_effect_") -> {
+                    updated = updated.copy(
+                        ownedChecklistEffects = (updated.ownedChecklistEffects + id).distinct(),
+                        activeChecklistEffect = if (equipNow) id else updated.activeChecklistEffect
+                    )
+                }
+            }
+        }
+        return updated
+    }
+
+    fun setOriginalSoundtrackEnabled(isEnabled: Boolean) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
-            repository.saveAppData(currentData.copy(isMusicEnabled = isEnabled))
+            repository.saveAppData(
+                currentData.copy(isOriginalSoundtrackEnabled = isEnabled)
+            )
+        }
+    }
+
+    fun setCurrentSoundtrack(soundtrackId: String) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            if (com.ade.habittracker.data.SoundtrackLibrary.getById(soundtrackId) == null) return@launch
+
+            val updatedSelections = if (soundtrackId in currentData.selectedSoundtracks) {
+                currentData.selectedSoundtracks
+            } else {
+                currentData.selectedSoundtracks + soundtrackId
+            }
+
+            repository.saveAppData(
+                currentData.copy(
+                    currentSoundtrack = soundtrackId,
+                    selectedSoundtracks = updatedSelections
+                )
+            )
+        }
+    }
+
+    fun toggleSoundtrackSelection(soundtrackId: String) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            if (com.ade.habittracker.data.SoundtrackLibrary.getById(soundtrackId) == null) return@launch
+
+            val currentSelections = currentData.selectedSoundtracks
+                .filter { com.ade.habittracker.data.SoundtrackLibrary.getById(it) != null }
+                .ifEmpty { com.ade.habittracker.data.SoundtrackLibrary.DEFAULT_SELECTION }
+                .toMutableList()
+
+            val updatedSelections = if (soundtrackId in currentSelections) {
+                if (currentSelections.size == 1) return@launch
+                currentSelections.apply { remove(soundtrackId) }
+            } else {
+                currentSelections.apply { add(soundtrackId) }
+            }
+
+            val nextCurrent = if (currentData.currentSoundtrack in updatedSelections) {
+                currentData.currentSoundtrack
+            } else {
+                updatedSelections.first()
+            }
+
+            repository.saveAppData(
+                currentData.copy(
+                    currentSoundtrack = nextCurrent,
+                    selectedSoundtracks = updatedSelections
+                )
+            )
+        }
+    }
+
+    fun moveSoundtrack(soundtrackId: String, direction: Int) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            if (direction == 0) return@launch
+
+            val currentSelections = currentData.selectedSoundtracks
+                .filter { com.ade.habittracker.data.SoundtrackLibrary.getById(it) != null }
+                .ifEmpty { com.ade.habittracker.data.SoundtrackLibrary.DEFAULT_SELECTION }
+                .toMutableList()
+
+            val currentIndex = currentSelections.indexOf(soundtrackId)
+            if (currentIndex < 0) return@launch
+
+            val targetIndex = (currentIndex + direction).coerceIn(0, currentSelections.lastIndex)
+            if (targetIndex == currentIndex) return@launch
+
+            val item = currentSelections.removeAt(currentIndex)
+            currentSelections.add(targetIndex, item)
+
+            repository.saveAppData(
+                currentData.copy(selectedSoundtracks = currentSelections)
+            )
+        }
+    }
+
+    fun resetSoundtrackPlaylist() {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            repository.saveAppData(
+                currentData.copy(
+                    currentSoundtrack = com.ade.habittracker.data.SoundtrackLibrary.DEFAULT_ID,
+                    selectedSoundtracks = com.ade.habittracker.data.SoundtrackLibrary.DEFAULT_SELECTION
+                )
+            )
+        }
+    }
+
+    fun selectAssistant(assistantId: String) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val assistant = AssistantRoster.getById(assistantId) ?: return@launch
+            val updatedHistories = ensureAssistantGreeting(
+                histories = currentData.assistantChatHistories,
+                assistantId = assistant.id,
+                greeting = assistant.greeting
+            )
+            repository.saveAppData(
+                currentData.copy(
+                    selectedAssistantId = assistant.id,
+                    assistantChatHistories = updatedHistories
+                )
+            )
+        }
+    }
+
+    fun sendMessageToAssistant(text: String) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val sanitized = text.trim()
+            if (sanitized.isBlank()) return@launch
+
+            val assistant = AssistantRoster.getById(currentData.selectedAssistantId)
+                ?: AssistantRoster.getById(AssistantRoster.DEFAULT_ID)
+                ?: return@launch
+
+            val historiesWithGreeting = ensureAssistantGreeting(
+                histories = currentData.assistantChatHistories,
+                assistantId = assistant.id,
+                greeting = assistant.greeting
+            )
+            val currentHistory = historiesWithGreeting[assistant.id].orEmpty()
+
+            val userMessage = AssistantChatMessage(
+                id = UUID.randomUUID().toString(),
+                assistantId = assistant.id,
+                sender = AssistantMessageSender.USER,
+                text = sanitized,
+                timestamp = System.currentTimeMillis()
+            )
+            val assistantMessage = AssistantChatMessage(
+                id = UUID.randomUUID().toString(),
+                assistantId = assistant.id,
+                sender = AssistantMessageSender.ASSISTANT,
+                text = generateAssistantReply(assistant, sanitized, currentData),
+                timestamp = System.currentTimeMillis() + 1
+            )
+
+            repository.saveAppData(
+                currentData.copy(
+                    selectedAssistantId = assistant.id,
+                    assistantChatHistories = historiesWithGreeting + (
+                        assistant.id to (currentHistory + userMessage + assistantMessage).takeLast(40)
+                    )
+                )
+            )
+        }
+    }
+
+    fun clearAssistantConversation(assistantId: String) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val assistant = AssistantRoster.getById(assistantId) ?: return@launch
+            val resetHistory = listOf(
+                AssistantChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    assistantId = assistant.id,
+                    sender = AssistantMessageSender.ASSISTANT,
+                    text = assistant.greeting,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+            repository.saveAppData(
+                currentData.copy(
+                    assistantChatHistories = currentData.assistantChatHistories + (assistant.id to resetHistory)
+                )
+            )
         }
     }
 
@@ -324,11 +588,176 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun importCustomCoverImage(uri: Uri, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = saveCustomCoverImage(uri)
+            onResult(success)
+        }
+    }
+
     fun updateUserTitle(newTitle: String) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
             repository.saveAppData(currentData.copy(userTitle = newTitle))
         }
+    }
+
+    fun updateRecommendationPreferences(
+        activityType: String,
+        field: String,
+        stage: String,
+        age: Int?
+    ) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val updated = currentData.copy(
+                recommendationActivityType = activityType,
+                recommendationField = field,
+                recommendationStage = stage,
+                recommendationAge = age
+            )
+            if (updated != currentData) {
+                repository.saveAppData(updated)
+            }
+        }
+    }
+
+    fun toggleHabitCompactMode() {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            repository.saveAppData(currentData.copy(isHabitCompactMode = !currentData.isHabitCompactMode))
+        }
+    }
+
+    fun togglePinnedHabit(habitId: Int) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val currentPins = currentData.pinnedHabitIds.filter { id -> currentData.habits.any { it.id == id } }
+            val updatedPins = if (habitId in currentPins) {
+                currentPins - habitId
+            } else {
+                (currentPins + habitId).takeLast(3)
+            }
+            repository.saveAppData(currentData.copy(pinnedHabitIds = updatedPins))
+        }
+    }
+
+    fun setFocusLinkedHabit(habitId: Int?) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val validId = habitId?.takeIf { id -> currentData.habits.any { it.id == id } }
+            repository.saveAppData(currentData.copy(focusLinkedHabitId = validId))
+        }
+    }
+
+    fun selectFocusDuration(minutes: Int) {
+        if (minutes !in listOf(15, 25, 50, 90)) return
+        if (_focusTimerState.value.isRunning) return
+        _focusTimerState.value = _focusTimerState.value.copy(
+            selectedDurationMinutes = minutes,
+            remainingSeconds = minutes * 60
+        )
+    }
+
+    fun updateFocusDailyTarget(target: Int) {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            repository.saveAppData(currentData.copy(focusDailyTargetSessions = target.coerceIn(1, 8)))
+        }
+    }
+
+    fun toggleFocusTimer() {
+        if (_focusTimerState.value.isRunning) {
+            pauseFocusTimer()
+        } else {
+            startFocusTimer()
+        }
+    }
+
+    fun startFocusTimer() {
+        if (_focusTimerState.value.isRunning) return
+        if (_focusTimerState.value.remainingSeconds <= 0) {
+            val durationMinutes = _focusTimerState.value.selectedDurationMinutes
+            _focusTimerState.value = _focusTimerState.value.copy(remainingSeconds = durationMinutes * 60)
+        }
+
+        focusTimerJob?.cancel()
+        _focusTimerState.value = _focusTimerState.value.copy(isRunning = true)
+        focusTimerJob = viewModelScope.launch {
+            while (_focusTimerState.value.isRunning && _focusTimerState.value.remainingSeconds > 0) {
+                delay(1000)
+                val current = _focusTimerState.value
+                if (!current.isRunning) break
+                val nextRemaining = (current.remainingSeconds - 1).coerceAtLeast(0)
+                _focusTimerState.value = current.copy(remainingSeconds = nextRemaining)
+                if (nextRemaining == 0) {
+                    completeFocusSession()
+                }
+            }
+        }
+    }
+
+    fun pauseFocusTimer() {
+        focusTimerJob?.cancel()
+        _focusTimerState.value = _focusTimerState.value.copy(isRunning = false)
+    }
+
+    fun resetFocusTimer() {
+        focusTimerJob?.cancel()
+        val durationMinutes = _focusTimerState.value.selectedDurationMinutes
+        _focusTimerState.value = _focusTimerState.value.copy(
+            isRunning = false,
+            remainingSeconds = durationMinutes * 60
+        )
+    }
+
+    fun dismissFocusCompletion() {
+        _focusTimerState.value = _focusTimerState.value.copy(completionToken = 0L)
+    }
+
+    private fun completeFocusSession() {
+        focusTimerJob?.cancel()
+        val durationMinutes = _focusTimerState.value.selectedDurationMinutes
+        val reward = focusRewardFor(durationMinutes)
+        val today = LocalDate.now()
+        val todayStr = today.toString()
+
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val completedToday = if (currentData.focusLastSessionDate == todayStr) {
+                currentData.focusSessionsCompletedToday + 1
+            } else {
+                1
+            }
+
+            val newStreak = when (currentData.focusLastSessionDate) {
+                todayStr -> currentData.focusCurrentStreakDays.coerceAtLeast(1)
+                today.minusDays(1).toString() -> currentData.focusCurrentStreakDays + 1
+                else -> 1
+            }
+
+            val updated = currentData.copy(
+                totalXp = currentData.totalXp + reward.xp,
+                level = calculateLevel(currentData.totalXp + reward.xp),
+                coins = currentData.coins + reward.coins,
+                focusSessionsCompletedToday = completedToday,
+                focusLastSessionDate = todayStr,
+                focusTotalSessions = currentData.focusTotalSessions + 1,
+                focusTotalMinutes = currentData.focusTotalMinutes + durationMinutes,
+                focusCurrentStreakDays = newStreak,
+                focusBestStreakDays = maxOf(currentData.focusBestStreakDays, newStreak)
+            )
+            repository.saveAppData(updated)
+        }
+
+        _focusTimerState.value = _focusTimerState.value.copy(
+            isRunning = false,
+            remainingSeconds = durationMinutes * 60,
+            lastCompletedDurationMinutes = durationMinutes,
+            lastEarnedXp = reward.xp,
+            lastEarnedCoins = reward.coins,
+            completionToken = System.currentTimeMillis()
+        )
     }
 
     fun markAchievementsBannerShown(achievementIds: Set<String>) {
@@ -342,36 +771,8 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun syncAccountWithFirebaseSession() {
+    fun onAuthenticated(suggestedUserName: String? = null) {
         viewModelScope.launch {
-            val uid = runCatching { FirebaseAuth.getInstance().currentUser?.uid }
-                .getOrNull()
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-
-            if (uid == null) {
-                repository.switchActiveAccount(null)
-                val guestData = repository.getCurrentAppData()
-                if (guestData.isLoggedIn) {
-                    repository.saveAppData(guestData.copy(isLoggedIn = false))
-                }
-                return@launch
-            }
-
-            repository.switchActiveAccount(uid)
-            val currentData = repository.getCurrentAppData()
-            if (!currentData.isLoggedIn) {
-                repository.saveAppData(currentData.copy(isLoggedIn = true))
-            }
-        }
-    }
-
-    fun onAuthenticated(userId: String, suggestedUserName: String? = null) {
-        viewModelScope.launch {
-            val accountId = userId.trim()
-            if (accountId.isEmpty()) return@launch
-
-            repository.switchActiveAccount(accountId)
             val currentData = repository.getCurrentAppData()
 
             val normalizedName = suggestedUserName
@@ -395,18 +796,8 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
     fun onUnauthenticated() {
         viewModelScope.launch {
             val currentData = repository.getCurrentAppData()
-            if (currentData.isLoggedIn) {
-                repository.saveAppData(currentData.copy(isLoggedIn = false))
-            }
-            repository.switchActiveAccount(null)
-            rescheduleHabitReminders(AppData())
-        }
-    }
-
-    fun setLoggedIn(isLoggedIn: Boolean) {
-        viewModelScope.launch {
-            val currentData = appData.value ?: repository.getCurrentAppData()
-            repository.saveAppData(currentData.copy(isLoggedIn = isLoggedIn))
+            repository.saveAppData(currentData.copy(isLoggedIn = true))
+            rescheduleHabitReminders(currentData)
         }
     }
 
@@ -486,6 +877,53 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
             )
             _dailyRewardState.value = null
         }
+    }
+
+    fun spinLuckyReward() {
+        viewModelScope.launch {
+            val currentData = appData.value ?: return@launch
+            val today = LocalDate.now()
+            val todayStr = today.toString()
+            val hasFreeSpinToday = currentData.lastLuckySpinDate != todayStr
+            val canUseTicket = currentData.tickets > 0
+            if (!hasFreeSpinToday && !canUseTicket) return@launch
+
+            val reward = LuckySpinConfig.spin(
+                Random(
+                    System.currentTimeMillis() +
+                        currentData.totalXp +
+                        currentData.coins +
+                        currentData.tickets +
+                        currentData.totalHabitsCompleted
+                )
+            )
+            val usedTicket = !hasFreeSpinToday
+            val rewardXp = if (reward.type == LuckyRewardType.XP) reward.amount else 0
+            val rewardCoins = if (reward.type == LuckyRewardType.COINS) reward.amount else 0
+            val rewardTickets = if (reward.type == LuckyRewardType.TICKETS) reward.amount else 0
+            val nextXp = currentData.totalXp + rewardXp
+            val spentTickets = if (usedTicket) 1 else 0
+            val nextTickets = (currentData.tickets - spentTickets + rewardTickets).coerceAtLeast(0)
+
+            repository.saveAppData(
+                currentData.copy(
+                    totalXp = nextXp,
+                    level = calculateLevel(nextXp),
+                    coins = currentData.coins + rewardCoins,
+                    tickets = nextTickets,
+                    lastLuckySpinDate = if (hasFreeSpinToday) todayStr else currentData.lastLuckySpinDate
+                )
+            )
+
+            _luckySpinResultState.value = LuckySpinResult(
+                reward = reward,
+                usedTicket = usedTicket
+            )
+        }
+    }
+
+    fun dismissLuckySpinResult() {
+        _luckySpinResultState.value = null
     }
 
     fun addHabit(name: String, schedule: String, weight: Int) {
@@ -696,6 +1134,11 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
         return Pair(totalXp - currentLevelXp, 100)
     }
 
+    fun getFocusReward(minutes: Int): Pair<Int, Int> {
+        val reward = focusRewardFor(minutes)
+        return reward.xp to reward.coins
+    }
+
     fun scheduleDailyReminder(context: Context) {
         viewModelScope.launch {
             val currentData = appData.value ?: return@launch
@@ -745,7 +1188,72 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun calculateLevel(totalXp: Int): Int = (totalXp / 100) + 1
 
+    private fun buildFocusSummary(data: AppData?): FocusSummary {
+        if (data == null) return FocusSummary()
+        val today = LocalDate.now()
+        val todayStr = today.toString()
+        val currentStreak = when (data.focusLastSessionDate) {
+            todayStr, today.minusDays(1).toString() -> data.focusCurrentStreakDays
+            else -> 0
+        }
+        val sessionsToday = if (data.focusLastSessionDate == todayStr) data.focusSessionsCompletedToday else 0
+        return FocusSummary(
+            dailyTargetSessions = data.focusDailyTargetSessions.coerceIn(1, 8),
+            sessionsCompletedToday = sessionsToday,
+            totalSessions = data.focusTotalSessions,
+            totalMinutes = data.focusTotalMinutes,
+            currentStreakDays = currentStreak,
+            bestStreakDays = data.focusBestStreakDays
+        )
+    }
+
+    private data class FocusReward(val xp: Int, val coins: Int)
+
+    private fun focusRewardFor(minutes: Int): FocusReward = when {
+        minutes >= 90 -> FocusReward(xp = 50, coins = 12)
+        minutes >= 50 -> FocusReward(xp = 30, coins = 8)
+        minutes >= 25 -> FocusReward(xp = 20, coins = 5)
+        else -> FocusReward(xp = 10, coins = 3)
+    }
+
     private suspend fun saveCustomProfileImage(uri: Uri): Boolean {
+        return saveCustomImage(uri, "profile_images", "custom_profile.jpg") { currentData, path ->
+            currentData.copy(customProfileImagePath = path)
+        }
+    }
+
+    private suspend fun saveCustomCoverImage(uri: Uri): Boolean {
+        return saveCustomImage(uri, "cover_images", "custom_cover.jpg") { currentData, path ->
+            currentData.copy(customCoverImagePath = path)
+        }
+    }
+
+    private fun ensureAssistantGreeting(
+        histories: Map<String, List<AssistantChatMessage>>,
+        assistantId: String,
+        greeting: String
+    ): Map<String, List<AssistantChatMessage>> {
+        val existing = histories[assistantId].orEmpty()
+        if (existing.isNotEmpty()) return histories
+        return histories + (
+            assistantId to listOf(
+                AssistantChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    assistantId = assistantId,
+                    sender = AssistantMessageSender.ASSISTANT,
+                    text = greeting,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        )
+    }
+
+    private suspend fun saveCustomImage(
+        uri: Uri,
+        folderName: String,
+        fileName: String,
+        updater: (AppData, String) -> AppData
+    ): Boolean {
         return runCatching {
             val sourceBitmap = appContext.contentResolver.openInputStream(uri)?.use { input ->
                 BitmapFactory.decodeStream(input)
@@ -764,8 +1272,8 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
                 sourceBitmap
             }
 
-            val dir = File(appContext.filesDir, "profile_images").apply { mkdirs() }
-            val file = File(dir, "custom_profile.jpg")
+            val dir = File(appContext.filesDir, folderName).apply { mkdirs() }
+            val file = File(dir, fileName)
             FileOutputStream(file).use { output ->
                 finalBitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)
             }
@@ -776,9 +1284,7 @@ class HabitViewModel(application: Application) : AndroidViewModel(application) {
             sourceBitmap.recycle()
 
             val currentData = appData.value ?: repository.getCurrentAppData()
-            repository.saveAppData(
-                currentData.copy(customProfileImagePath = file.absolutePath)
-            )
+            repository.saveAppData(updater(currentData, file.absolutePath))
             true
         }.getOrElse { false }
     }

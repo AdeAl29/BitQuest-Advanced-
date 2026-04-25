@@ -1,6 +1,7 @@
 ﻿package com.ade.habittracker.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,14 +20,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,6 +53,7 @@ import com.ade.habittracker.R
 import com.ade.habittracker.model.Habit
 import com.ade.habittracker.model.HabitScheduleType
 import com.ade.habittracker.model.completedCountInWeek
+import com.ade.habittracker.model.isCompletedOn
 import com.ade.habittracker.model.isDueOn
 import com.ade.habittracker.ui.components.ChibiMessage
 import com.ade.habittracker.ui.components.DraggableChibiWithBubble
@@ -58,6 +65,9 @@ import com.ade.habittracker.ui.theme.TextColorPrimary
 import com.ade.habittracker.ui.theme.TextColorSecondary
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 enum class HabitTab(val title: String) {
     ALL("Semua"),
@@ -72,6 +82,8 @@ fun HabitsScreen(
     chibiRes: Int = R.drawable.chibi_helper,
     isChibiEnabled: Boolean = true,
     isChibiVoiceEnabled: Boolean = true,
+    activeMissionCardSkinId: String = "mission_card_default",
+    activeChecklistEffectId: String = "checklist_effect_default",
     onHabitCheckedChanged: (Habit, Boolean) -> Unit,
     onReminderToggle: (Habit, Boolean) -> Unit,
     onEditClick: (Habit) -> Unit,
@@ -79,13 +91,20 @@ fun HabitsScreen(
 ) {
     var selectedTab by remember { mutableStateOf(HabitTab.ALL) }
     var showGuide by remember { mutableStateOf(false) }
+    var showCalendarSheet by remember { mutableStateOf(false) }
     var chibiNotification by remember { mutableStateOf<String?>(null) }
 
     val today = LocalDate.now()
-    val dueHabits = remember(habits, today) { habits.filter { it.isDueOn(today) } }
+    var selectedDate by remember { mutableStateOf(today) }
+    var displayedMonth by remember { mutableStateOf(YearMonth.now()) }
+    val activeDate = selectedDate
+    val localeId = remember { Locale.forLanguageTag("id-ID") }
+    val shortDateFormatter = remember(localeId) { DateTimeFormatter.ofPattern("dd MMM", localeId) }
+    val fullDateFormatter = remember(localeId) { DateTimeFormatter.ofPattern("EEEE, dd MMM", localeId) }
+    val dueHabits = remember(habits, activeDate) { habits.filter { it.isDueOn(activeDate) } }
 
     val totalHabits = dueHabits.size
-    val completedHabits = dueHabits.count { it.isCompleted }
+    val completedHabits = dueHabits.count { it.isCompletedOn(activeDate) || (activeDate == today && it.isCompleted) }
     val progress = if (totalHabits > 0) completedHabits.toFloat() / totalHabits else 0f
 
     val animatedProgress by animateFloatAsState(
@@ -93,13 +112,13 @@ fun HabitsScreen(
         label = "progress"
     )
 
-    val filteredHabits = remember(habits, selectedTab, today) {
+    val filteredHabits = remember(habits, selectedTab, activeDate, today) {
         when (selectedTab) {
             HabitTab.ALL -> habits.sortedWith(
-                compareBy<Habit>({ !it.isDueOn(today) }, { it.isCompleted })
+                compareBy<Habit>({ !it.isDueOn(activeDate) }, { !(it.isCompletedOn(activeDate) || (activeDate == today && it.isCompleted)) })
             )
-            HabitTab.PENDING -> habits.filter { it.isDueOn(today) && !it.isCompleted }
-            HabitTab.COMPLETED -> habits.filter { it.isCompleted }
+            HabitTab.PENDING -> habits.filter { it.isDueOn(activeDate) && !(it.isCompletedOn(activeDate) || (activeDate == today && it.isCompleted)) }
+            HabitTab.COMPLETED -> habits.filter { it.isCompletedOn(activeDate) || (activeDate == today && it.isCompleted) }
         }
     }
 
@@ -146,46 +165,64 @@ fun HabitsScreen(
                 Column {
                     Text(
                         text = "MISI HARIAN",
-                        fontSize = 22.sp,
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Black,
-                        color = TextColorPrimary
+                        color = AccentYellow
+                    )
+                    Text(
+                        text = activeDate.format(fullDateFormatter).replaceFirstChar { it.titlecase(localeId) },
+                        fontSize = 11.sp,
+                        color = AccentYellow.copy(alpha = 0.9f),
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
                         text = if (totalHabits > 0) {
-                            "$completedHabits dari $totalHabits misi terjadwal hari ini"
+                            if (activeDate == today) {
+                                "$completedHabits dari $totalHabits misi terjadwal hari ini"
+                            } else {
+                                "$completedHabits dari $totalHabits misi untuk ${activeDate.format(shortDateFormatter)}"
+                            }
                         } else {
-                            "Tidak ada misi terjadwal hari ini"
+                            if (activeDate == today) "Tidak ada misi terjadwal hari ini" else "Tidak ada misi untuk ${activeDate.format(shortDateFormatter)}"
                         },
                         fontSize = 12.sp,
                         color = TextColorSecondary
                     )
                 }
-                IconButton(onClick = { showGuide = true }) {
-                    Icon(Icons.AutoMirrored.Filled.Help, "Panduan", tint = AccentYellow)
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    IconButton(onClick = {
+                        displayedMonth = YearMonth.from(activeDate)
+                        showCalendarSheet = true
+                    }) {
+                        Icon(Icons.Default.CalendarMonth, "Kalender", tint = AccentYellow)
+                    }
+                    IconButton(onClick = { showGuide = true }) {
+                        Icon(Icons.AutoMirrored.Filled.Help, "Panduan", tint = AccentYellow)
+                    }
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
 
             Card(
                 colors = CardDefaults.cardColors(containerColor = CardBackground),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Progress Hari Ini", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        Text("${(progress * 100).toInt()}%", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentYellow)
+                        Text("Progress Hari Ini", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("${(progress * 100).toInt()}%", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AccentYellow)
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
                     LinearProgressIndicator(
                         progress = { animatedProgress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(8.dp)
+                            .height(7.dp)
                             .clip(CircleShape),
                         color = AccentYellow,
                         trackColor = Color.DarkGray
@@ -193,7 +230,76 @@ fun HabitsScreen(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                HabitStatChip(
+                    modifier = Modifier.weight(1f),
+                    title = "Belum",
+                    value = (totalHabits - completedHabits).coerceAtLeast(0).toString(),
+                    accent = Color(0xFFFFB74D)
+                )
+                HabitStatChip(
+                    modifier = Modifier.weight(1f),
+                    title = "Selesai",
+                    value = completedHabits.toString(),
+                    accent = Color(0xFF66BB6A)
+                )
+                HabitStatChip(
+                    modifier = Modifier.weight(1f),
+                    title = "Kalender",
+                    value = activeDate.dayOfMonth.toString(),
+                    accent = AccentYellow,
+                    onClick = {
+                        displayedMonth = YearMonth.from(activeDate)
+                        showCalendarSheet = true
+                    }
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+
+            if (activeDate != today) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, AccentYellow.copy(alpha = 0.2f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "Menampilkan ${activeDate.format(shortDateFormatter)}",
+                                color = TextColorPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Daftar misi sedang difilter mengikuti tanggal yang dipilih dari kalender.",
+                                color = TextColorSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Text(
+                            text = "Hari Ini",
+                            color = AccentYellow,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { selectedDate = today }
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+            }
 
             Row(
                 modifier = Modifier
@@ -259,21 +365,25 @@ fun HabitsScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 100.dp)
                 ) {
                     items(filteredHabits, key = { it.id }) { habit ->
-                        val isDueToday = habit.isDueOn(today)
+                        val isDueForSelectedDate = habit.isDueOn(activeDate)
+                        val isCompletedForSelectedDate = habit.isCompletedOn(activeDate) || (activeDate == today && habit.isCompleted)
                         val extraInfo = when {
-                            !isDueToday -> "Tidak terjadwal hari ini"
+                            activeDate != today && isDueForSelectedDate -> "Terjadwal untuk ${activeDate.format(shortDateFormatter)}"
+                            !isDueForSelectedDate -> if (activeDate == today) "Tidak terjadwal hari ini" else "Tidak terjadwal di ${activeDate.format(shortDateFormatter)}"
                             habit.scheduleType == HabitScheduleType.TIMES_PER_WEEK -> {
-                                "${habit.completedCountInWeek(today)}/${habit.targetPerWeek.coerceIn(1, 7)} selesai minggu ini"
+                                "${habit.completedCountInWeek(activeDate)}/${habit.targetPerWeek.coerceIn(1, 7)} selesai minggu ini"
                             }
                             else -> null
                         }
 
                         HabitItem(
-                            habit = habit,
-                            isDueToday = isDueToday,
+                            habit = habit.copy(isCompleted = isCompletedForSelectedDate),
+                            isDueToday = isDueForSelectedDate,
                             extraScheduleInfo = extraInfo,
+                            missionCardSkinId = activeMissionCardSkinId,
+                            checklistEffectId = activeChecklistEffectId,
                             onCheckedChanged = { checked ->
-                                if (!isDueToday) return@HabitItem
+                                if (!isDueForSelectedDate || activeDate != today) return@HabitItem
                                 if (!habit.isCompleted && checked) {
                                     chibiNotification = "Mantap! +${habit.weight} XP"
                                 }
@@ -318,6 +428,304 @@ fun HabitsScreen(
                 },
                 containerColor = CardBackground
             )
+        }
+
+        if (showCalendarSheet) {
+            MissionCalendarSheet(
+                habits = habits,
+                selectedDate = selectedDate,
+                displayedMonth = displayedMonth,
+                onSelectedDateChange = {
+                    selectedDate = it
+                    displayedMonth = YearMonth.from(it)
+                    showCalendarSheet = false
+                },
+                onDisplayedMonthChange = { displayedMonth = it },
+                onDismiss = { showCalendarSheet = false }
+            )
+        }
+    }
+}
+
+@Composable
+private fun HabitStatChip(
+    modifier: Modifier = Modifier,
+    title: String,
+    value: String,
+    accent: Color,
+    onClick: (() -> Unit)? = null
+) {
+    Card(
+        modifier = modifier.then(
+            if (onClick != null) Modifier.clickable { onClick() } else Modifier
+        ),
+        colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.95f)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(title, color = TextColorSecondary, fontSize = 10.sp)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(value, color = TextColorPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+            Spacer(modifier = Modifier.height(2.dp))
+            Box(
+                modifier = Modifier
+                    .size(width = 20.dp, height = 3.dp)
+                    .clip(CircleShape)
+                    .background(accent)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MissionCalendarSheet(
+    habits: List<Habit>,
+    selectedDate: LocalDate,
+    displayedMonth: YearMonth,
+    onSelectedDateChange: (LocalDate) -> Unit,
+    onDisplayedMonthChange: (YearMonth) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val localeId = remember { Locale.forLanguageTag("id-ID") }
+    val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", localeId) }
+    val selectedDateFormatter = remember { DateTimeFormatter.ofPattern("EEE, dd MMM", localeId) }
+    val daysInMonth = remember(displayedMonth) { displayedMonth.lengthOfMonth() }
+    val firstDayOffset = remember(displayedMonth) { displayedMonth.atDay(1).dayOfWeek.value - 1 }
+    val calendarDays = remember(displayedMonth) {
+        buildList {
+            repeat(firstDayOffset) { add(null) }
+            for (day in 1..daysInMonth) {
+                add(displayedMonth.atDay(day))
+            }
+            while (size % 7 != 0) add(null)
+        }
+    }
+    val dueForSelectedDate = remember(habits, selectedDate) { habits.filter { it.isDueOn(selectedDate) } }
+    val completedForSelectedDate = remember(habits, selectedDate) { habits.filter { it.isCompletedOn(selectedDate) } }
+    val xpForSelectedDate = remember(completedForSelectedDate) { completedForSelectedDate.sumOf { it.weight } }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = CardBackground
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { onDisplayedMonthChange(displayedMonth.minusMonths(1)) }) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Bulan sebelumnya", tint = AccentYellow)
+                }
+                Text(
+                    text = displayedMonth.format(monthFormatter).replaceFirstChar { it.titlecase(localeId) },
+                    color = TextColorPrimary,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Black
+                )
+                IconButton(onClick = { onDisplayedMonthChange(displayedMonth.plusMonths(1)) }) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Bulan berikutnya", tint = AccentYellow)
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                listOf("Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min").forEach { day ->
+                    Text(
+                        text = day,
+                        color = TextColorSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                calendarDays.chunked(7).forEach { week ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        week.forEach { date ->
+                            CalendarDayCell(
+                                modifier = Modifier.weight(1f),
+                                date = date,
+                                isSelected = date == selectedDate,
+                                isToday = date == LocalDate.now(),
+                                dueCount = date?.let { day -> habits.count { it.isDueOn(day) } } ?: 0,
+                                completedCount = date?.let { day -> habits.count { it.isCompletedOn(day) } } ?: 0,
+                                onClick = { if (date != null) onSelectedDateChange(date) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, AccentYellow.copy(alpha = 0.14f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = selectedDate.format(selectedDateFormatter).replaceFirstChar { it.titlecase(localeId) },
+                            color = TextColorPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (dueForSelectedDate.isEmpty()) {
+                                "Belum ada misi terjadwal di tanggal ini."
+                            } else {
+                                "${completedForSelectedDate.size} dari ${dueForSelectedDate.size} misi selesai • $xpForSelectedDate XP"
+                            },
+                            color = TextColorSecondary,
+                            fontSize = 12.sp
+                        )
+                        if (completedForSelectedDate.isNotEmpty()) {
+                            Text(
+                                text = completedForSelectedDate.take(2).joinToString("  •  ") { it.name },
+                                color = TextColorSecondary,
+                                fontSize = 11.sp,
+                                maxLines = 2
+                            )
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MiniCalendarStat(value = dueForSelectedDate.size.toString(), label = "Misi", accent = AccentYellow)
+                        MiniCalendarStat(value = completedForSelectedDate.size.toString(), label = "Done", accent = Color(0xFF66BB6A))
+                        MiniCalendarStat(value = xpForSelectedDate.toString(), label = "XP", accent = Color(0xFF29B6F6))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun MiniCalendarStat(
+    value: String,
+    label: String,
+    accent: Color
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = 0.12f)),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = value,
+                color = TextColorPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+            Text(
+                text = label,
+                color = accent,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+private fun CalendarDayCell(
+    modifier: Modifier = Modifier,
+    date: LocalDate?,
+    isSelected: Boolean,
+    isToday: Boolean,
+    dueCount: Int,
+    completedCount: Int,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = modifier
+            .height(58.dp)
+            .then(if (date != null) Modifier.clickable { onClick() } else Modifier),
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                date == null -> Color.Transparent
+                isSelected -> AccentYellow.copy(alpha = 0.22f)
+                isToday -> AccentYellow.copy(alpha = 0.12f)
+                else -> Color.White.copy(alpha = 0.03f)
+            }
+        ),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(
+            1.dp,
+            when {
+                date == null -> Color.Transparent
+                isSelected -> AccentYellow.copy(alpha = 0.75f)
+                isToday -> AccentYellow.copy(alpha = 0.32f)
+                else -> Color.Transparent
+            }
+        )
+    ) {
+        if (date != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = date.dayOfMonth.toString(),
+                    color = when {
+                        isSelected -> AccentYellow
+                        isToday -> AccentYellow.copy(alpha = 0.95f)
+                        else -> TextColorPrimary
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = if (isToday || isSelected) FontWeight.Bold else FontWeight.Medium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (dueCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(AccentYellow.copy(alpha = 0.9f))
+                        )
+                    }
+                    if (completedCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF66BB6A))
+                        )
+                    }
+                }
+            }
         }
     }
 }

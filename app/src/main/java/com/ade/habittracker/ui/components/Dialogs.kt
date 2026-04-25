@@ -1,7 +1,6 @@
 package com.ade.habittracker.ui.components
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -54,7 +53,6 @@ fun AchievementDescriptionDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // 🔥 TAMBAHAN: Menampilkan Icon Badge di Dialog
                 if (achievement.isUnlocked) {
                     Image(
                         painter = painterResource(id = achievement.imageResId),
@@ -93,7 +91,6 @@ fun AchievementDescriptionDialog(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 🔥 PERBAIKAN: Menggunakan 'target' bukan 'goal'
                 Text(
                     text = "Progress: ${achievement.progress} / ${achievement.target}",
                     color = if (achievement.isUnlocked) AccentYellow else TextColorPrimary,

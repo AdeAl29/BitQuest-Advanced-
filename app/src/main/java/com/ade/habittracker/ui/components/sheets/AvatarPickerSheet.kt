@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.ade.habittracker.ui.theme.AccentYellow
 import com.ade.habittracker.ui.theme.CardBackground
 import com.ade.habittracker.ui.theme.TextColorPrimary
+import com.ade.habittracker.ui.theme.TextColorSecondary
 import com.ade.habittracker.ui.viewmodel.AvatarItem
 
 @Composable
@@ -55,7 +56,6 @@ fun AvatarPickerSheet(
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier.padding(bottom = 16.dp)
     ) {
-        // Judul
         item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
             Button(
                 onClick = onPickFromGallery,
@@ -87,12 +87,11 @@ fun AvatarPickerSheet(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Card(
                     shape = CircleShape,
-                    // Beri border kuning jika DIPILIH
                     border = if (isSelected) BorderStroke(3.dp, AccentYellow) else null,
                     colors = CardDefaults.cardColors(containerColor = CardBackground),
                     modifier = Modifier
                         .size(100.dp)
-                        .clickable(enabled = isUnlocked) { // Hanya bisa diklik jika TERBUKA
+                        .clickable(enabled = isUnlocked) {
                             onAvatarSelected(avatar.id)
                         }
                 ) {
@@ -101,14 +100,12 @@ fun AvatarPickerSheet(
                             painter = painterResource(id = avatar.resId),
                             contentDescription = "Avatar ${avatar.id}",
                             contentScale = ContentScale.Crop,
-                            // Buat gambar jadi abu-abu jika TERKUNCI
                             alpha = if (isUnlocked) 1.0f else 0.3f,
                             modifier = Modifier
                                 .clip(CircleShape)
                                 .padding(if (isSelected) 6.dp else 0.dp)
                         )
 
-                        // --- TAMPILKAN GEMBOK JIKA TERKUNCI ---
                         if (!isUnlocked) {
                             Icon(
                                 Icons.Default.Lock,
@@ -120,7 +117,6 @@ fun AvatarPickerSheet(
                     }
                 }
 
-                // --- TAMPILKAN LEVEL YANG DIBUTUHKAN JIKA TERKUNCI ---
                 if (!isUnlocked) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(

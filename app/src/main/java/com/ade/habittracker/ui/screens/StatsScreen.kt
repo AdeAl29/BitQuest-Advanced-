@@ -98,6 +98,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.io.File
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -114,33 +115,39 @@ fun StatsScreen(
     maxXp: Int,
     totalLoginDays: Int,
     userName: String,
-    userTitle: String,
-    @DrawableRes profileImageResId: Int,
-    customProfileImagePath: String? = null,
     @DrawableRes chibiRes: Int = R.drawable.chibi_helper,
     isChibiEnabled: Boolean = true,
     isChibiVoiceEnabled: Boolean = true,
-    onNameClick: () -> Unit,
-    onAvatarClick: () -> Unit,
-    onTitleClick: () -> Unit,
     viewModel: HabitViewModel? = null
 ) {
-    // --- STATE MANAGEMENT ---
     val historyList = viewModel?.habitHistory?.collectAsStateWithLifecycle()?.value ?: emptyList()
     val allAchievements = viewModel?.achievements?.collectAsStateWithLifecycle()?.value ?: emptyList()
     val heatmapData = viewModel?.heatmapData?.collectAsStateWithLifecycle()?.value ?: emptyMap()
     val weeklySummary = viewModel?.weeklySummary?.collectAsStateWithLifecycle()?.value
     val appData = viewModel?.appData?.collectAsStateWithLifecycle()?.value
 
-    // 🔥 AMBIL DATA BADGE DARI VIEWMODEL (PERSISTENT) 🔥
-    val equippedBadges = viewModel?.equippedBadgesMap?.collectAsStateWithLifecycle()?.value ?: emptyMap()
-
     val unlockedAchievements = remember(allAchievements) {
         allAchievements.filter { it.isUnlocked }
     }
-
-    var showBadgeSelector by remember { mutableStateOf(false) }
-    var selectedSlotIndex by remember { mutableStateOf<Int?>(null) }
+    val levelPalette = remember(level) { statsPaletteForLevel(level) }
+    val completionRate = weeklySummary?.completionRate?.coerceIn(0f, 1f)
+        ?: if (historyList.isNotEmpty()) 1f else 0f
+    val completedMissions = historyList.size
+    val xpTrend7Days = remember(historyList) { buildXpTrend7Days(historyList) }
+    val badgeCompletion = if (allAchievements.isNotEmpty()) {
+        unlockedAchievements.size.toFloat() / allAchievements.size.toFloat()
+    } else {
+        0f
+    }
+    val bestStreak = maxOf(streak, weeklySummary?.bestStreakDays ?: 0)
+    val nextTarget = when {
+        streak < 3 -> 3
+        streak < 7 -> 7
+        streak < 14 -> 14
+        streak < 30 -> 30
+        else -> ((streak / 10) + 1) * 10
+    }
+    val xpRemaining = (maxXp - xpProgress).coerceAtLeast(0)
     var showHistoryDialog by remember { mutableStateOf(false) }
     var showStreakDialog by remember { mutableStateOf(false) }
     var showCompletedDialog by remember { mutableStateOf(false) }
@@ -172,7 +179,6 @@ fun StatsScreen(
         base.distinctBy { it.text }
     }
 
-    // Animasi Progress Bar
     val safeProgress = if (maxXp > 0) xpProgress.toFloat() / maxXp.toFloat() else 0f
     val animatedProgress by animateFloatAsState(
         targetValue = safeProgress.coerceIn(0f, 1f),
@@ -181,7 +187,6 @@ fun StatsScreen(
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
-
         FallingSnowEffect(
             modifier = Modifier
                 .fillMaxSize()
@@ -195,333 +200,138 @@ fun StatsScreen(
                 .zIndex(1f),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-
-            // Container Scrollable Utama
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 contentPadding = PaddingValues(top = 16.dp, bottom = 100.dp)
             ) {
-
-                // 1. HEADER TITLE
                 item {
-                    Text(
-                        text = "STATUS KARAKTER",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Black,
-                        color = AccentYellow,
-                        letterSpacing = 2.sp,
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                }
-
-                // 2. HERO PROFILE CARD
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.95f)),
-                        elevation = CardDefaults.cardElevation(12.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(contentAlignment = Alignment.BottomCenter) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(115.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Brush.radialGradient(
-                                                colors = listOf(AccentYellow.copy(alpha = 0.4f), Color.Transparent)
-                                            )
-                                        )
-                                )
-
-                                if (!customProfileImagePath.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = File(customProfileImagePath),
-                                        contentDescription = "Avatar",
-                                        contentScale = ContentScale.Crop,
-                                        error = painterResource(id = profileImageResId),
-                                        placeholder = painterResource(id = profileImageResId),
-                                        modifier = Modifier
-                                            .size(110.dp)
-                                            .clip(CircleShape)
-                                            .border(3.dp, AccentYellow, CircleShape)
-                                            .clickable { onAvatarClick() }
-                                    )
-                                } else {
-                                    Image(
-                                        painter = painterResource(id = profileImageResId),
-                                        contentDescription = "Avatar",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(110.dp)
-                                            .clip(CircleShape)
-                                            .border(3.dp, AccentYellow, CircleShape)
-                                            .clickable { onAvatarClick() }
-                                    )
-                                }
-
-                                Surface(
-                                    shape = RoundedCornerShape(50),
-                                    color = PrimaryColor,
-                                    modifier = Modifier.offset(y = 14.dp),
-                                    shadowElevation = 6.dp,
-                                    border = BorderStroke(2.dp, CardBackground)
-                                ) {
-                                    Text(
-                                        text = "LVL $level",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = Color.White,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(20.dp))
-
-                            // INFO USER
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = userName,
-                                    fontSize = 24.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextColorPrimary
-                                )
-                                IconButton(onClick = onNameClick, modifier = Modifier.size(28.dp)) {
-                                    Icon(Icons.Default.Edit, "Edit", tint = TextColorSecondary.copy(alpha = 0.7f))
-                                }
-                            }
-
-                            Text(
-                                text = userTitle,
-                                fontSize = 14.sp,
-                                color = AccentYellow,
-                                fontWeight = FontWeight.Medium,
-                                letterSpacing = 1.sp,
-                                modifier = Modifier
-                                    .clickable { onTitleClick() }
-                                    .padding(4.dp)
-                                    .background(AccentYellow.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            // EXP BAR
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.Bottom
-                                ) {
-                                    Text("EXP PROGRESS", fontSize = 10.sp, fontWeight = FontWeight.Black, color = TextColorSecondary)
-                                    Text(
-                                        text = "$xpProgress / $maxXp XP",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = AccentYellow
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                LinearProgressIndicator(
-                                    progress = { animatedProgress },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(12.dp)
-                                        .clip(RoundedCornerShape(50)),
-                                    color = AccentYellow,
-                                    trackColor = Color(0xFF333333),
-                                    strokeCap = StrokeCap.Round,
-                                )
-                            }
-                        }
+                        Text(
+                            text = "STATISTIK PETUALANG",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Black,
+                            color = AccentYellow,
+                            letterSpacing = 1.6.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Level, konsistensi, dan performa produktivitasmu ada di sini.",
+                            fontSize = 12.sp,
+                            color = TextColorSecondary,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
 
                 item {
-                    ActiveBadgesCard(
-                        equippedBadges = equippedBadges,
-                        onBadgeClick = { slotIndex ->
-                            selectedSlotIndex = slotIndex
-                            showBadgeSelector = true
-                        }
+                    StatsLevelHeroCard(
+                        level = level,
+                        xpProgress = xpProgress,
+                        maxXp = maxXp,
+                        totalXp = totalXp,
+                        streak = streak,
+                        completionRate = completionRate,
+                        xpProgressFraction = animatedProgress,
+                        palette = levelPalette
                     )
                 }
 
-                // 3. STATISTIK GRID
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Box(Modifier.weight(1f)) {
-                                GameStatCard(
-                                    title = "Streak",
-                                    value = "$streak Hari",
-                                    icon = Icons.Default.LocalFireDepartment,
-                                    iconColor = Color(0xFFFF5722),
-                                    subText = "Lihat Detail >",
-                                    isClickable = true,
-                                    onClick = { showStreakDialog = true }
-                                )
-                            }
-                            Box(Modifier.weight(1f)) {
-                                GameStatCard(
-                                    title = "Total XP",
-                                    value = "$totalXp",
-                                    icon = Icons.Default.Star,
-                                    iconColor = AccentYellow,
-                                    subText = "Lihat Riwayat >",
-                                    isClickable = true,
-                                    onClick = { showHistoryDialog = true }
-                                )
-                            }
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Box(Modifier.weight(1f)) {
-                                GameStatCard(
-                                    title = "Misi Selesai",
-                                    value = "${historyList.size}",
-                                    icon = Icons.Default.CheckCircle,
-                                    iconColor = Color(0xFF4CAF50),
-                                    subText = "Lihat Detail >",
-                                    isClickable = true,
-                                    onClick = { showCompletedDialog = true }
-                                )
-                            }
-                            Box(Modifier.weight(1f)) {
-                                GameStatCard(
-                                    title = "Login",
-                                    value = "$totalLoginDays Hari",
-                                    icon = Icons.Default.DateRange,
-                                    iconColor = Color(0xFF2196F3),
-                                    subText = "Lihat Detail >",
-                                    isClickable = true,
-                                    onClick = { showLoginDialog = true }
-                                )
-                            }
-                        }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ProfileMetricCard(
+                            modifier = Modifier.weight(1f),
+                            title = "Streak",
+                            value = "$streak hari",
+                            description = "Target berikutnya $nextTarget",
+                            accent = Color(0xFFFF7043),
+                            onClick = { showStreakDialog = true }
+                        )
+                        ProfileMetricCard(
+                            modifier = Modifier.weight(1f),
+                            title = "Total XP",
+                            value = "$totalXp",
+                            description = if (xpRemaining > 0) "$xpRemaining XP lagi" else "Naik level siap",
+                            accent = levelPalette.primary,
+                            onClick = { showHistoryDialog = true }
+                        )
                     }
                 }
 
-                // 4. PRODUCTIVITY HEATMAP
                 item {
-                    ProductivityHeatmap(heatmapData = heatmapData)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ProfileMetricCard(
+                            modifier = Modifier.weight(1f),
+                            title = "Misi Selesai",
+                            value = "$completedMissions",
+                            description = "Buka detail misi",
+                            accent = Color(0xFF4CAF50),
+                            onClick = { showCompletedDialog = true }
+                        )
+                        ProfileMetricCard(
+                            modifier = Modifier.weight(1f),
+                            title = "Login",
+                            value = "$totalLoginDays hari",
+                            description = "Cek hadiah login",
+                            accent = Color(0xFF42A5F5),
+                            onClick = { showLoginDialog = true }
+                        )
+                    }
                 }
 
-                // 5. WEEKLY SUMMARY
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ProfileMetricCard(
+                            modifier = Modifier.weight(1f),
+                            title = "Prestasi",
+                            value = "${unlockedAchievements.size}/${allAchievements.size}",
+                            description = "${(badgeCompletion * 100).toInt()}% koleksi",
+                            accent = Color(0xFFFFC107)
+                        )
+                        ProfileMetricCard(
+                            modifier = Modifier.weight(1f),
+                            title = "Konsistensi",
+                            value = "${(completionRate * 100).toInt()}%",
+                            description = "Best streak $bestStreak hari",
+                            accent = levelPalette.secondary
+                        )
+                    }
+                }
+
+                item {
+                    StatsInsightCard(
+                        palette = levelPalette,
+                        level = level,
+                        xpProgress = xpProgress,
+                        maxXp = maxXp,
+                        streak = streak,
+                        unlockedAchievements = unlockedAchievements.size,
+                        totalAchievements = allAchievements.size,
+                        weeklySummary = weeklySummary
+                    )
+                }
+
+                item {
+                    XpTrendCard(
+                        data = xpTrend7Days,
+                        accent = levelPalette.primary
+                    )
+                }
                 item {
                     weeklySummary?.let {
                         WeeklySummaryCard(summary = it)
                     }
                 }
-            }
-        }
 
-        // ─── SHEET: PEMILIH BADGE ───
-        if (showBadgeSelector) {
-            ModalBottomSheet(
-                onDismissRequest = { showBadgeSelector = false },
-                containerColor = CardBackground
-            ) {
-                Column(modifier = Modifier.padding(16.dp).padding(bottom = 32.dp)) {
-                    Text(
-                        "Pilih Prestasi untuk Slot ${selectedSlotIndex?.plus(1)}",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextColorPrimary,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-
-                    if (unlockedAchievements.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().height(100.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("Belum ada prestasi yang terbuka!", color = TextColorSecondary)
-                        }
-                    } else {
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 70.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // Opsi Lepas Badge
-                            item {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable {
-                                        selectedSlotIndex?.let { slot ->
-                                            // 🔥 SIMPAN KE DATABASE (LEPAS)
-                                            viewModel?.equipBadge(slot, null)
-                                        }
-                                        showBadgeSelector = false
-                                    }
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(50.dp)
-                                            .clip(CircleShape)
-                                            .border(1.dp, Color.Gray, CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(Icons.Default.Close, null, tint = Color.Gray)
-                                    }
-                                    Text("Lepas", fontSize = 10.sp, color = TextColorSecondary, modifier = Modifier.padding(top = 4.dp))
-                                }
-                            }
-
-                            // Daftar Badge Unlocked
-                            items(unlockedAchievements) { achievement ->
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable {
-                                        selectedSlotIndex?.let { slot ->
-                                            // 🔥 SIMPAN KE DATABASE (PASANG)
-                                            viewModel?.equipBadge(slot, achievement.id)
-                                        }
-                                        showBadgeSelector = false
-                                    }
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(50.dp)
-                                            .clip(CircleShape)
-                                            .background(AccentYellow.copy(alpha = 0.1f))
-                                            .border(1.dp, AccentYellow.copy(alpha = 0.5f), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Image(
-                                            painter = painterResource(id = achievement.imageResId),
-                                            contentDescription = achievement.title,
-                                            contentScale = ContentScale.Fit,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                    }
-                                    Text(
-                                        achievement.title,
-                                        fontSize = 10.sp,
-                                        color = TextColorPrimary,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                        maxLines = 1,
-                                        modifier = Modifier.padding(top = 4.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
+                item {
+                    ProductivityHeatmap(heatmapData = heatmapData)
                 }
             }
         }
-
-        // ─── DIALOG HISTORY ───
         if (showHistoryDialog) {
             HistoryLogDialog(historyList) { showHistoryDialog = false }
         }
@@ -564,7 +374,274 @@ fun StatsScreen(
     }
 }
 
-// ─── COMPONENT HELPER ───
+private data class LevelPalette(
+    val label: String,
+    val primary: Color,
+    val secondary: Color,
+    val glow: Color
+)
+
+private fun statsPaletteForLevel(level: Int): LevelPalette = when {
+    level >= 30 -> LevelPalette("LEGEND", Color(0xFFFFC857), Color(0xFFFF8A65), Color(0x66FFC857))
+    level >= 20 -> LevelPalette("MASTER", Color(0xFFFF8A65), Color(0xFFFFB74D), Color(0x66FF8A65))
+    level >= 15 -> LevelPalette("ELITE", Color(0xFF66BB6A), Color(0xFF26C6DA), Color(0x6666BB6A))
+    level >= 10 -> LevelPalette("CHALLENGER", Color(0xFF29B6F6), Color(0xFF26A69A), Color(0x6629B6F6))
+    level >= 5 -> LevelPalette("EXPLORER", Color(0xFF7E57C2), Color(0xFF42A5F5), Color(0x667E57C2))
+    else -> LevelPalette("ROOKIE", Color(0xFFFFD54F), Color(0xFFFFA726), Color(0x66FFD54F))
+}
+
+@Composable
+private fun StatsLevelHeroCard(
+    level: Int,
+    xpProgress: Int,
+    maxXp: Int,
+    totalXp: Int,
+    streak: Int,
+    completionRate: Float,
+    xpProgressFraction: Float,
+    palette: LevelPalette
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.98f)),
+        border = BorderStroke(1.dp, palette.primary.copy(alpha = 0.28f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            palette.glow.copy(alpha = 0.35f),
+                            CardBackground.copy(alpha = 0.98f),
+                            CardBackground
+                        )
+                    )
+                )
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "LEVEL SAAT INI",
+                        fontSize = 11.sp,
+                        letterSpacing = 1.4.sp,
+                        fontWeight = FontWeight.Black,
+                        color = palette.primary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = palette.label,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = TextColorPrimary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Total XP $totalXp • streak $streak hari",
+                        fontSize = 12.sp,
+                        color = TextColorSecondary
+                    )
+                }
+
+                Box(
+                    modifier = Modifier.size(168.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(150.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.radialGradient(
+                                    colors = listOf(palette.glow, Color.Transparent)
+                                )
+                            )
+                    )
+                    CircularProgressIndicator(
+                        progress = { 1f },
+                        modifier = Modifier.size(148.dp),
+                        color = Color.White.copy(alpha = 0.08f),
+                        strokeWidth = 14.dp
+                    )
+                    CircularProgressIndicator(
+                        progress = { xpProgressFraction.coerceIn(0f, 1f) },
+                        modifier = Modifier.size(148.dp),
+                        color = palette.primary,
+                        strokeWidth = 14.dp,
+                        trackColor = Color.Transparent,
+                        strokeCap = StrokeCap.Round
+                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "LVL",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.2.sp,
+                            color = palette.secondary
+                        )
+                        Text(
+                            text = level.toString(),
+                            fontSize = 42.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = TextColorPrimary
+                        )
+                        Text(
+                            text = "$xpProgress / $maxXp XP",
+                            fontSize = 11.sp,
+                            color = TextColorSecondary
+                        )
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatsMiniStrip(
+                    modifier = Modifier.weight(1f),
+                    title = "Progress Level",
+                    value = "${(xpProgressFraction * 100).toInt()}%",
+                    accent = palette.primary
+                )
+                StatsMiniStrip(
+                    modifier = Modifier.weight(1f),
+                    title = "Ritme Mingguan",
+                    value = "${(completionRate * 100).toInt()}%",
+                    accent = palette.secondary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatsMiniStrip(
+    modifier: Modifier = Modifier,
+    title: String,
+    value: String,
+    accent: Color
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.18f)),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.24f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(title, fontSize = 11.sp, color = TextColorSecondary)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(value, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = accent)
+        }
+    }
+}
+
+@Composable
+private fun ProfileMetricCard(
+    modifier: Modifier = Modifier,
+    title: String,
+    value: String,
+    description: String,
+    accent: Color,
+    onClick: (() -> Unit)? = null
+) {
+    Card(
+        modifier = modifier
+            .height(110.dp)
+            .clickable(enabled = onClick != null) { onClick?.invoke() },
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBackground),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.18f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(title, color = TextColorSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text(value, color = TextColorPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
+            Text(description, color = accent, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun StatsInsightCard(
+    palette: LevelPalette,
+    level: Int,
+    xpProgress: Int,
+    maxXp: Int,
+    streak: Int,
+    unlockedAchievements: Int,
+    totalAchievements: Int,
+    weeklySummary: WeeklySummary?
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.96f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "INSIGHT LEVEL",
+                color = palette.primary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 1.2.sp
+            )
+            Text(
+                text = "Kamu ada di tier ${palette.label.lowercase().replaceFirstChar { it.uppercase() }}.",
+                color = TextColorPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = buildString {
+                    append("Naik level berikutnya butuh ")
+                    append((maxXp - xpProgress).coerceAtLeast(0))
+                    append(" XP lagi. ")
+                    if (weeklySummary != null) {
+                        append("Minggu ini kamu menyelesaikan ${weeklySummary.completedThisWeek} dari ${weeklySummary.dueThisWeek} misi.")
+                    } else {
+                        append("Terus tambah misi dan selesaikan secara konsisten untuk membuka insight mingguan.")
+                    }
+                },
+                color = TextColorSecondary,
+                fontSize = 12.sp
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatsMiniStrip(
+                    modifier = Modifier.weight(1f),
+                    title = "Tier",
+                    value = "Lv $level",
+                    accent = palette.primary
+                )
+                StatsMiniStrip(
+                    modifier = Modifier.weight(1f),
+                    title = "Prestasi",
+                    value = "$unlockedAchievements/$totalAchievements",
+                    accent = palette.secondary
+                )
+                StatsMiniStrip(
+                    modifier = Modifier.weight(1f),
+                    title = "Streak",
+                    value = "$streak h",
+                    accent = AccentYellow
+                )
+            }
+        }
+    }
+}
+// Component helpers
 
 @Composable
 fun BadgeSlotItem(
@@ -777,6 +854,101 @@ private data class HabitCompletionSummary(
     val completedCount: Int,
     val totalXp: Int
 )
+
+private data class DailyXpPoint(
+    val date: LocalDate,
+    val xp: Int
+)
+
+private fun buildXpTrend7Days(historyList: List<HabitHistoryItem>): List<DailyXpPoint> {
+    val today = LocalDate.now()
+    val xpByDate = historyList.groupBy {
+        Instant.ofEpochMilli(it.timestamp)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDate()
+    }.mapValues { entry -> entry.value.sumOf { it.xpEarned } }
+
+    return (6 downTo 0).map { offset ->
+        val date = today.minusDays(offset.toLong())
+        DailyXpPoint(date = date, xp = xpByDate[date] ?: 0)
+    }
+}
+
+@Composable
+private fun XpTrendCard(
+    data: List<DailyXpPoint>,
+    accent: Color
+) {
+    val maxXp = data.maxOfOrNull { it.xp }?.coerceAtLeast(1) ?: 1
+    val formatter = remember { DateTimeFormatter.ofPattern("EEE", Locale.forLanguageTag("id-ID")) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.96f)),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.22f))
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Grafik XP 7 Hari", color = TextColorPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                    Text("Lihat ritme progress minggu ini.", color = TextColorSecondary, fontSize = 12.sp)
+                }
+                Text(
+                    text = "+${data.sumOf { it.xp }} XP",
+                    color = accent,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 14.sp
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(130.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                data.forEach { point ->
+                    val fraction = point.xp.toFloat() / maxXp.toFloat()
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Bottom
+                    ) {
+                        Text(point.xp.toString(), color = TextColorSecondary, fontSize = 9.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height((26 + 76 * fraction).dp)
+                                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 6.dp, bottomEnd = 6.dp))
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(accent, accent.copy(alpha = 0.24f))
+                                    )
+                                )
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            point.date.format(formatter).take(3),
+                            color = TextColorSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun StatsDetailDialog(
@@ -1237,3 +1409,4 @@ private fun formatIsoDateForUi(dateValue: String): String {
         )
     }.getOrElse { dateValue }
 }
+

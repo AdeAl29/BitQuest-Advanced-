@@ -95,7 +95,8 @@ private val customDayOptions = listOf(
 @Composable
 fun AddOptionsSheet(
     onManualAddClick: () -> Unit,
-    onTemplateAddClick: () -> Unit
+    onTemplateAddClick: () -> Unit,
+    onRecommendationClick: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -120,6 +121,19 @@ fun AddOptionsSheet(
                 .height(60.dp)
         ) {
             Text("Pilih dari Template", fontSize = 16.sp)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = onRecommendationClick,
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentYellow, contentColor = Color.Black),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp)
+        ) {
+            Text("Rekomendasi Misi", fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(16.dp))

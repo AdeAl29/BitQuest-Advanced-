@@ -3,6 +3,7 @@
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,8 +19,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -39,14 +44,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ade.habittracker.model.Habit
+import com.ade.habittracker.data.ShopRepository
 import com.ade.habittracker.ui.theme.AccentYellow
 import com.ade.habittracker.ui.theme.CardBackground
 import com.ade.habittracker.ui.theme.PrimaryColor
@@ -59,6 +65,11 @@ fun HabitItem(
     habit: Habit,
     isDueToday: Boolean,
     extraScheduleInfo: String?,
+    missionCardSkinId: String = "mission_card_default",
+    checklistEffectId: String = "checklist_effect_default",
+    isPinned: Boolean = false,
+    isCompactMode: Boolean = false,
+    onTogglePinned: () -> Unit = {},
     onCheckedChanged: (Boolean) -> Unit,
     onReminderToggle: (Boolean) -> Unit,
     onEditClick: () -> Unit,
@@ -102,9 +113,29 @@ fun HabitItem(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(18.dp))
                     .background(color)
-            )
+                    .padding(horizontal = 18.dp),
+                contentAlignment = when (dismissState.targetValue) {
+                    SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                    SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                    else -> Alignment.Center
+                }
+            ) {
+                val swipeIcon = when (dismissState.targetValue) {
+                    SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Edit
+                    SwipeToDismissBoxValue.EndToStart -> Icons.Default.Delete
+                    else -> null
+                }
+                swipeIcon?.let {
+                    Icon(
+                        imageVector = it,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
         },
         content = {
             HabitCardContent(
@@ -112,6 +143,11 @@ fun HabitItem(
                 statusColor = statusColor,
                 isDueToday = isDueToday,
                 extraScheduleInfo = extraScheduleInfo,
+                missionCardSkinId = missionCardSkinId,
+                checklistEffectId = checklistEffectId,
+                isPinned = isPinned,
+                isCompactMode = isCompactMode,
+                onTogglePinned = onTogglePinned,
                 onCheckedChanged = onCheckedChanged,
                 onReminderToggle = onReminderToggle
             )
@@ -125,21 +161,43 @@ private fun HabitCardContent(
     statusColor: Color,
     isDueToday: Boolean,
     extraScheduleInfo: String?,
+    missionCardSkinId: String,
+    checklistEffectId: String,
+    isPinned: Boolean,
+    isCompactMode: Boolean,
+    onTogglePinned: () -> Unit,
     onCheckedChanged: (Boolean) -> Unit,
     onReminderToggle: (Boolean) -> Unit
 ) {
+    val missionCardSkin = ShopRepository.getMissionCardSkinById(missionCardSkinId)
+    val checklistEffect = ShopRepository.getChecklistEffectById(checklistEffectId)
+    val effectiveStatusColor = when {
+        habit.isCompleted -> checklistEffect.primaryColor
+        missionCardSkinId != "mission_card_default" -> missionCardSkin.primaryColor
+        else -> statusColor
+    }
+    val cardContainer = if (missionCardSkinId == "mission_card_default") {
+        CardBackground
+    } else {
+        missionCardSkin.secondaryColor.copy(alpha = 0.92f)
+    }
     val contentAlpha by animateFloatAsState(
         targetValue = if (habit.isCompleted) 0.6f else 1f,
         label = "alpha"
     )
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = CardBackground),
-        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = cardContainer),
+        shape = RoundedCornerShape(18.dp),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (habit.isCompleted) checklistEffect.primaryColor.copy(alpha = 0.28f)
+            else effectiveStatusColor.copy(alpha = 0.22f)
+        )
     ) {
         Row(
             modifier = Modifier
@@ -150,62 +208,73 @@ private fun HabitCardContent(
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(6.dp)
+                    .width(8.dp)
                     .background(
                         brush = Brush.verticalGradient(
-                            colors = listOf(statusColor, statusColor.copy(alpha = 0.5f))
+                            colors = listOf(effectiveStatusColor, effectiveStatusColor.copy(alpha = 0.45f))
                         )
-                    )
-                    .shadow(
-                        elevation = 12.dp,
-                        shape = RoundedCornerShape(0.dp),
-                        spotColor = statusColor
                     )
             )
 
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .padding(horizontal = 16.dp, vertical = if (isCompactMode) 10.dp else 14.dp)
                     .alpha(contentAlpha),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(if (isCompactMode) 3.dp else 6.dp)
             ) {
                 Text(
                     text = habit.name,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = if (isCompactMode) 15.sp else 16.sp,
+                    fontWeight = FontWeight.ExtraBold,
                     color = TextColorPrimary,
                     textDecoration = if (habit.isCompleted) TextDecoration.LineThrough else null
                 )
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(
-                        color = Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(4.dp)
+                if (!isCompactMode) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
+                        HabitMetaChip(
                             text = habit.schedule,
-                            fontSize = 11.sp,
-                            color = TextColorSecondary,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            accent = Color.White.copy(alpha = 0.16f),
+                            icon = null
                         )
+                        HabitMetaChip(
+                            text = "+${habit.weight} XP",
+                            accent = if (habit.isCompleted) checklistEffect.primaryColor else Color(0xFFFFC107),
+                            icon = Icons.Default.CheckCircle
+                        )
+                        if (isPinned) {
+                            HabitMetaChip(
+                                text = "Pinned",
+                                accent = AccentYellow,
+                                icon = Icons.Default.Star
+                            )
+                        }
+                        if (!isDueToday) {
+                            HabitMetaChip(
+                                text = "Tidak aktif",
+                                accent = Color(0xFF90A4AE),
+                                icon = null
+                            )
+                        }
                     }
 
-                    Spacer(Modifier.width(10.dp))
-
+                    if (!extraScheduleInfo.isNullOrBlank()) {
+                        Text(
+                            text = extraScheduleInfo,
+                            fontSize = 11.sp,
+                            color = if (isDueToday) TextColorSecondary else Color(0xFFB0BEC5)
+                        )
+                    }
+                } else {
                     Text(
-                        text = "+${habit.weight} XP",
-                        fontSize = 12.sp,
-                        color = if (habit.isCompleted) PrimaryColor else Color(0xFFFFC107),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                if (!extraScheduleInfo.isNullOrBlank()) {
-                    Text(
-                        text = extraScheduleInfo,
+                        text = "${habit.schedule} • +${habit.weight} XP",
                         fontSize = 11.sp,
-                        color = if (isDueToday) TextColorSecondary else Color(0xFFB0BEC5)
+                        color = TextColorSecondary,
+                        maxLines = 1
                     )
                 }
             }
@@ -215,6 +284,17 @@ private fun HabitCardContent(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 modifier = Modifier.padding(end = 8.dp)
             ) {
+                IconButton(
+                    onClick = onTogglePinned,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = if (isPinned) "Lepas pin" else "Pin misi",
+                        tint = if (isPinned) AccentYellow else TextColorSecondary.copy(alpha = 0.55f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
                 IconButton(
                     onClick = { onReminderToggle(!habit.reminderEnabled) },
                     modifier = Modifier.size(34.dp)
@@ -232,15 +312,74 @@ private fun HabitCardContent(
                     enabled = isDueToday && !habit.isCompleted,
                     onCheckedChange = onCheckedChanged,
                     colors = CheckboxDefaults.colors(
-                        checkedColor = PrimaryColor,
+                        checkedColor = checklistEffect.primaryColor,
                         uncheckedColor = TextColorSecondary,
                         checkmarkColor = Color.Black,
-                        disabledCheckedColor = PrimaryColor.copy(alpha = 0.7f),
+                        disabledCheckedColor = checklistEffect.primaryColor.copy(alpha = 0.7f),
                         disabledUncheckedColor = TextColorSecondary.copy(alpha = 0.4f)
                     ),
                     modifier = Modifier.size(30.dp)
                 )
+                if (habit.isCompleted && checklistEffectId != "checklist_effect_default") {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(checklistEffect.primaryColor.copy(alpha = 0.18f))
+                            .border(
+                                width = 1.dp,
+                                color = checklistEffect.primaryColor.copy(alpha = 0.28f),
+                                shape = RoundedCornerShape(10.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = checklistEffect.emoji,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Black,
+                            color = checklistEffect.primaryColor
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun HabitMetaChip(
+    text: String,
+    accent: Color,
+    icon: ImageVector?
+) {
+    Surface(
+        color = accent.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.border(
+            width = 1.dp,
+            color = accent.copy(alpha = 0.16f),
+            shape = RoundedCornerShape(8.dp)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            icon?.let {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+            Text(
+                text = text,
+                fontSize = 11.sp,
+                color = if (accent == Color.White.copy(alpha = 0.16f)) TextColorSecondary else accent,
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }

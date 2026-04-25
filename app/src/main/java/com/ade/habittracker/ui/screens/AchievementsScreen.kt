@@ -43,6 +43,13 @@ import com.ade.habittracker.ui.components.FallingSnowEffect
 import com.ade.habittracker.ui.theme.*
 import java.time.LocalTime
 
+private enum class AchievementFilter(val label: String) {
+    ALL("Semua"),
+    UNLOCKED("Terbuka"),
+    NEAR("Hampir"),
+    LOCKED("Terkunci")
+}
+
 @Composable
 fun AchievementsScreen(
     achievements: List<Achievement>,
@@ -52,10 +59,19 @@ fun AchievementsScreen(
     isChibiVoiceEnabled: Boolean = true
 ) {
     var achievementToShowDesc by remember { mutableStateOf<Achievement?>(null) }
+    var selectedFilter by remember { mutableStateOf(AchievementFilter.ALL) }
 
     // Logic Sorting: Yang terbuka di atas, lalu urutkan berdasarkan progress
-    val sortedAchievements = remember(achievements) {
-        achievements.sortedWith(
+    val sortedAchievements = remember(achievements, selectedFilter) {
+        achievements.filter { achievement ->
+            val progressRatio = if (achievement.target > 0) achievement.progress.toFloat() / achievement.target.toFloat() else 0f
+            when (selectedFilter) {
+                AchievementFilter.ALL -> true
+                AchievementFilter.UNLOCKED -> achievement.isUnlocked
+                AchievementFilter.NEAR -> !achievement.isUnlocked && progressRatio >= 0.6f
+                AchievementFilter.LOCKED -> !achievement.isUnlocked
+            }
+        }.sortedWith(
             compareByDescending<Achievement> { it.isUnlocked }
                 .thenByDescending { if (it.target > 0) it.progress.toFloat() / it.target else 0f }
         )
@@ -104,12 +120,25 @@ fun AchievementsScreen(
         ) {
 
             // 2. Judul Halaman
-            Text(
-                text = "PENCAPAIAN SAYA",
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
-                color = TextColorPrimary,
-                modifier = Modifier.padding(top = 24.dp, bottom = 16.dp)
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 20.dp, bottom = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "PENCAPAIAN SAYA",
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+                    color = AccentYellow
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Lihat badge yang sudah terbuka dan progres yang sedang berjalan.",
+                    color = TextColorSecondary,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -126,6 +155,28 @@ fun AchievementsScreen(
                         totalCount = totalCount,
                         progress = progressPercentage
                     )
+                }
+
+                item(span = { GridItemSpan(2) }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AchievementFilter.values().forEach { filter ->
+                            val selected = selectedFilter == filter
+                            FilterChip(
+                                selected = selected,
+                                onClick = { selectedFilter = filter },
+                                label = {
+                                    Text(
+                                        text = filter.label,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                }
+                            )
+                        }
+                    }
                 }
 
                 // 4. Item List
@@ -167,7 +218,6 @@ fun AchievementStatsCard(
     totalCount: Int,
     progress: Float
 ) {
-    // Animasi Progress Bar Circular
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
         animationSpec = tween(durationMillis = 1500),
@@ -176,64 +226,110 @@ fun AchievementStatsCard(
 
     Card(
         colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.9f)),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, AccentYellow.copy(alpha = 0.24f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .padding(16.dp)
                 .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Indikator Lingkaran
-            Box(contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    progress = { 1f },
-                    modifier = Modifier.size(60.dp),
-                    color = Color.Gray.copy(alpha = 0.2f), // Track color
-                    strokeWidth = 6.dp,
-                )
-                CircularProgressIndicator(
-                    progress = { animatedProgress },
-                    modifier = Modifier.size(60.dp),
-                    color = AccentYellow,
-                    strokeWidth = 6.dp,
-                )
-                Icon(
-                    imageVector = Icons.Default.EmojiEvents,
-                    contentDescription = null,
-                    tint = AccentYellow,
-                    modifier = Modifier.size(24.dp)
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = { 1f },
+                        modifier = Modifier.size(66.dp),
+                        color = Color.Gray.copy(alpha = 0.2f),
+                        strokeWidth = 7.dp,
+                    )
+                    CircularProgressIndicator(
+                        progress = { animatedProgress },
+                        modifier = Modifier.size(66.dp),
+                        color = AccentYellow,
+                        strokeWidth = 7.dp,
+                    )
+                    Icon(
+                        imageVector = Icons.Default.EmojiEvents,
+                        contentDescription = null,
+                        tint = AccentYellow,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column {
+                    Text(
+                        text = "Total Koleksi",
+                        fontSize = 14.sp,
+                        color = TextColorSecondary,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "$unlockedCount dari $totalCount Terbuka",
+                        fontSize = 18.sp,
+                        color = TextColorPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${(progress * 100).toInt()}% Selesai",
+                        fontSize = 12.sp,
+                        color = AccentYellow,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
-
-            Column {
-                Text(
-                    text = "Total Koleksi",
-                    fontSize = 14.sp,
-                    color = TextColorSecondary,
-                    fontWeight = FontWeight.Medium
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                AchievementMiniPill(
+                    modifier = Modifier.weight(1f),
+                    title = "Terbuka",
+                    value = unlockedCount.toString(),
+                    accent = AccentYellow
                 )
-                Text(
-                    text = "$unlockedCount dari $totalCount Terbuka",
-                    fontSize = 18.sp,
-                    color = TextColorPrimary,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "${(progress * 100).toInt()}% Selesai",
-                    fontSize = 12.sp,
-                    color = AccentYellow,
-                    fontWeight = FontWeight.SemiBold
+                AchievementMiniPill(
+                    modifier = Modifier.weight(1f),
+                    title = "Sisa",
+                    value = (totalCount - unlockedCount).coerceAtLeast(0).toString(),
+                    accent = PrimaryColor
                 )
             }
         }
     }
 }
 
+@Composable
+private fun AchievementMiniPill(
+    modifier: Modifier = Modifier,
+    title: String,
+    value: String,
+    accent: Color
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.18f)),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.2f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(title, color = TextColorSecondary, fontSize = 11.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(value, color = accent, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+        }
+    }
+}
 // --- COMPONENT: Kartu Achievement Individual ---
 @Composable
 fun AchievementCardItem(
@@ -241,6 +337,8 @@ fun AchievementCardItem(
     onClick: () -> Unit
 ) {
     val isUnlocked = achievement.isUnlocked
+    val isNearUnlock = !isUnlocked && achievement.target > 0 &&
+        achievement.progress.toFloat() / achievement.target.toFloat() >= 0.6f
 
     // Setup Warna & Animasi
     val borderColor by animateColorAsState(
@@ -270,8 +368,12 @@ fun AchievementCardItem(
             .fillMaxWidth()
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = CardBackground),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, borderColor), // Border Emas jika unlocked
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, when {
+            isUnlocked -> borderColor
+            isNearUnlock -> AccentYellow.copy(alpha = 0.36f)
+            else -> Color.White.copy(alpha = 0.06f)
+        }),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isUnlocked) 6.dp else 2.dp)
     ) {
         Column(
@@ -320,7 +422,7 @@ fun AchievementCardItem(
             Text(
                 text = achievement.title,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.ExtraBold,
                 color = if (isUnlocked) TextColorPrimary else TextColorSecondary,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
@@ -357,8 +459,17 @@ fun AchievementCardItem(
                     Text(
                         text = "${achievement.progress}/${achievement.target}",
                         fontSize = 10.sp,
-                        color = TextColorSecondary,
+                        color = if (isNearUnlock) AccentYellow else TextColorSecondary,
                         modifier = Modifier.align(Alignment.End)
+                    )
+                }
+                if (isNearUnlock) {
+                    Text(
+                        text = "HAMPIR TERBUKA",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        color = AccentYellow,
+                        modifier = Modifier.padding(top = 5.dp)
                     )
                 }
             } else {
@@ -374,7 +485,7 @@ fun AchievementCardItem(
                     Text(
                         text = if (isUnlocked) "TERBUKA" else "TERKUNCI",
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.ExtraBold,
                         color = if (isUnlocked) AccentYellow else TextColorSecondary
                     )
                 }
@@ -382,3 +493,5 @@ fun AchievementCardItem(
         }
     }
 }
+
+

@@ -66,9 +66,9 @@ class HabitHomeWidgetProvider : AppWidgetProvider() {
             LARGE
         }
 
-        private val rowIds = intArrayOf(R.id.row_1, R.id.row_2, R.id.row_3)
-        private val titleIds = intArrayOf(R.id.habit_title_1, R.id.habit_title_2, R.id.habit_title_3)
-        private val actionIds = intArrayOf(R.id.habit_action_1, R.id.habit_action_2, R.id.habit_action_3)
+        private val rowIds = intArrayOf(R.id.row_1, R.id.row_2, R.id.row_3, R.id.row_4)
+        private val titleIds = intArrayOf(R.id.habit_title_1, R.id.habit_title_2, R.id.habit_title_3, R.id.habit_title_4)
+        private val actionIds = intArrayOf(R.id.habit_action_1, R.id.habit_action_2, R.id.habit_action_3, R.id.habit_action_4)
 
         fun refreshAll(context: Context) {
             val appWidgetManager = AppWidgetManager.getInstance(context)
@@ -106,24 +106,31 @@ class HabitHomeWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.widget_subtitle, openAppIntent)
             views.setOnClickPendingIntent(R.id.widget_summary, openAppIntent)
             views.setOnClickPendingIntent(R.id.widget_focus, openAppIntent)
+            views.setOnClickPendingIntent(R.id.widget_stats_row, openAppIntent)
+            views.setOnClickPendingIntent(R.id.widget_stat_level, openAppIntent)
+            views.setOnClickPendingIntent(R.id.widget_stat_focus, openAppIntent)
+            views.setOnClickPendingIntent(R.id.widget_stat_tickets, openAppIntent)
             views.setOnClickPendingIntent(R.id.mini_container, openAppIntent)
             views.setOnClickPendingIntent(R.id.mini_title, openAppIntent)
             views.setOnClickPendingIntent(R.id.mini_progress, openAppIntent)
+            views.setOnClickPendingIntent(R.id.mini_subtitle, openAppIntent)
 
             views.setViewVisibility(R.id.mini_container, View.GONE)
             views.setViewVisibility(R.id.full_container, View.VISIBLE)
             views.setViewVisibility(R.id.progress_section, View.GONE)
             views.setViewVisibility(R.id.widget_streak, View.GONE)
+            views.setViewVisibility(R.id.row_4, View.GONE)
 
             val data = runBlocking { HabitRepository(context).appData.first() } ?: AppData()
             val today = LocalDate.now()
             val normalizedHabits = data.habits.map { habit ->
                 if (habit.isDailyQuest) habit else habit.normalizeForDate(today)
             }
+            val visibleHabitCount = if (widgetSize == WidgetSize.LARGE) 4 else 3
             val todayHabits = normalizedHabits
                 .filter { it.isDueOn(today) }
                 .sortedWith(compareBy<Habit> { it.isCompleted }.thenBy { it.name.lowercase() })
-                .take(3)
+                .take(visibleHabitCount)
             val totalToday = normalizedHabits.count { it.isDueOn(today) }
             val completedToday = normalizedHabits.count { it.isDueOn(today) && it.isCompleted }
             val pendingToday = normalizedHabits
@@ -138,13 +145,22 @@ class HabitHomeWidgetProvider : AppWidgetProvider() {
             } else {
                 0
             }
+            val levelLabel = "Lv ${data.level}"
+            val focusLabel = "Fokus ${data.focusSessionsCompletedToday}"
+            val ticketLabel = "Tiket ${data.tickets}"
+            val widgetAccent = resolveWidgetAccentColor(data)
+            val widgetTicketAccent = if (data.tickets > 0) 0xFFA5D6FF.toInt() else 0x80FFFFFF.toInt()
 
             when (widgetSize) {
                 WidgetSize.MINI -> {
                     views.setViewVisibility(R.id.mini_container, View.VISIBLE)
                     views.setViewVisibility(R.id.full_container, View.GONE)
-                    views.setTextViewText(R.id.mini_title, "Halo, ${trimLabel(displayName, 11)}")
+                    views.setTextViewText(R.id.mini_title, trimLabel(displayName, 12))
                     views.setTextViewText(R.id.mini_progress, "$progressPercent%")
+                    views.setTextViewText(
+                        R.id.mini_subtitle,
+                        "Lv ${data.level} • $completedToday/$totalToday misi"
+                    )
                 }
                 WidgetSize.MEDIUM -> {
                     views.setViewVisibility(R.id.mini_container, View.GONE)
@@ -167,11 +183,15 @@ class HabitHomeWidgetProvider : AppWidgetProvider() {
                 if (widgetSize == WidgetSize.MINI) {
                     views.setTextViewText(R.id.mini_title, "Belum Login")
                     views.setTextViewText(R.id.mini_progress, "Tap")
+                    views.setTextViewText(R.id.mini_subtitle, "Buka aplikasi dulu")
                 } else {
                     views.setTextViewText(R.id.widget_title, "Habit Tracker")
                     views.setTextViewText(R.id.widget_subtitle, dayLabel)
                     views.setTextViewText(R.id.widget_summary, "Masuk dulu untuk lihat misi hari ini.")
                     views.setTextViewText(R.id.widget_focus, "Login untuk aktifkan rekomendasi prioritas")
+                    views.setTextViewText(R.id.widget_stat_level, "Lv -")
+                    views.setTextViewText(R.id.widget_stat_focus, "Fokus -")
+                    views.setTextViewText(R.id.widget_stat_tickets, "Tiket -")
                     showSingleInfoRow(views, "Tap untuk buka aplikasi", openAppIntent)
                 }
                 return views
@@ -191,10 +211,26 @@ class HabitHomeWidgetProvider : AppWidgetProvider() {
                     "Prioritas: semua misi hari ini beres"
                 }
             )
+            if (widgetSize == WidgetSize.LARGE) {
+                views.setTextViewText(R.id.widget_title, "BitQuest Lv ${data.level}")
+                views.setTextViewText(R.id.widget_subtitle, "${trimLabel(displayName, 14)} - $dayLabel")
+            }
+            views.setTextViewText(R.id.widget_stat_level, levelLabel)
+            views.setTextViewText(R.id.widget_stat_focus, focusLabel)
+            views.setTextViewText(R.id.widget_stat_tickets, ticketLabel)
+            views.setTextColor(R.id.widget_title, widgetAccent)
+            views.setTextColor(R.id.widget_focus, widgetAccent)
+            views.setTextColor(R.id.widget_progress_percent, widgetAccent)
+            views.setTextColor(R.id.widget_stat_level, widgetAccent)
+            views.setTextColor(R.id.widget_stat_tickets, widgetTicketAccent)
 
             if (widgetSize == WidgetSize.MINI) {
-                views.setTextViewText(R.id.mini_title, "Halo, ${trimLabel(displayName, 11)}")
+                views.setTextViewText(R.id.mini_title, trimLabel(displayName, 12))
                 views.setTextViewText(R.id.mini_progress, "$progressPercent%")
+                views.setTextViewText(
+                    R.id.mini_subtitle,
+                    "Lv ${data.level} • Streak ${data.streak}"
+                )
                 return views
             }
 
@@ -373,5 +409,32 @@ class HabitHomeWidgetProvider : AppWidgetProvider() {
             if (maxLength <= 1) return text.take(1)
             return text.take(maxLength - 1) + "..."
         }
+
+        private fun resolveWidgetAccentColor(data: AppData): Int {
+            return when (data.activeTheme) {
+                "theme_ramadhan" -> 0xFF6ED39B.toInt()
+                "theme_ramadhan_festive" -> 0xFF9AF5C0.toInt()
+                "theme_ikuyo" -> 0xFFFF7085.toInt()
+                "theme_hutao" -> 0xFFFF8A65.toInt()
+                "theme_furina" -> 0xFF7ED8FF.toInt()
+                "theme_moonlit" -> 0xFF99D9FF.toInt()
+                "theme_forest_camp" -> 0xFF8EE7A8.toInt()
+                "theme_arcade" -> 0xFFAA9BFF.toInt()
+                "theme_ocean" -> 0xFF68C7FF.toInt()
+                "theme_forest" -> 0xFF7DFF9A.toInt()
+                "theme_sunset" -> 0xFFFFB066.toInt()
+                "theme_royal" -> 0xFFFFD54F.toInt()
+                "theme_blood" -> 0xFFFF7A7A.toInt()
+                else -> when {
+                    data.level >= 50 -> 0xFFFF9BC6.toInt()
+                    data.level >= 40 -> 0xFFCFA7FF.toInt()
+                    data.level >= 30 -> 0xFF83C8FF.toInt()
+                    data.level >= 20 -> 0xFF67E8F9.toInt()
+                    data.level >= 10 -> 0xFF92E6A7.toInt()
+                    else -> 0xFFFFE082.toInt()
+                }
+            }
+        }
     }
 }
+

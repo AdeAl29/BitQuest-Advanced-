@@ -46,52 +46,21 @@ class TimeSlotReminderWorker(
         val displayName = sanitizeDisplayName(appData.userName)
         val focusHabit = pickPriorityHabit(pendingHabits)
 
-        val (headline, message) = when {
-            forceNotify -> {
-                "$slotLabel, $displayName" to "Notifikasi aktif. Kamu akan dapat pengingat rutin pagi/siang/sore/malam."
-            }
-            pendingHabits.isEmpty() -> {
-                "$slotLabel, $displayName" to "Semua misi slot ini sudah aman. Jaga konsistensi sampai malam."
-            }
-            else -> {
-                buildHeadline(slotLabel, displayName, focusHabit, pendingHabits.size) to
-                    buildMessage(focusHabit, pendingHabits.size)
-            }
-        }
+        val copy = ReminderMessageFactory.buildTimeSlotReminder(
+            displayName = displayName,
+            focusHabitName = focusHabit?.name,
+            pendingCount = pendingHabits.size,
+            forceNotify = forceNotify,
+            seedHint = notificationId
+        )
 
         sendReminderNotification(
             notificationId = notificationId,
-            title = headline,
-            message = message
+            title = copy.title,
+            message = copy.message
         )
 
         return Result.success()
-    }
-
-    private fun buildHeadline(
-        slotLabel: String,
-        displayName: String,
-        focusHabit: Habit?,
-        pendingCount: Int
-    ): String {
-        if (focusHabit == null) {
-            return "$slotLabel, $displayName: saatnya cek misi"
-        }
-        val shortHabit = trimLabel(focusHabit.name, 20)
-        return "$slotLabel, $displayName: fokus $shortHabit ($pendingCount)"
-    }
-
-    private fun buildMessage(focusHabit: Habit?, pendingCount: Int): String {
-        if (focusHabit == null) {
-            return "Masih ada $pendingCount misi yang menunggu hari ini."
-        }
-
-        val primary = "${trimLabel(focusHabit.name, 32)} (+${focusHabit.weight} XP)"
-        return if (pendingCount > 1) {
-            "$primary jadi prioritas. Masih ada ${pendingCount - 1} misi lain yang menunggu."
-        } else {
-            "$primary adalah misi terakhir hari ini. Sikat biar streak aman."
-        }
     }
 
     private fun pickPriorityHabit(pendingHabits: List<Habit>): Habit? {
@@ -109,13 +78,6 @@ class TimeSlotReminderWorker(
         }
         return trimmed
     }
-
-    private fun trimLabel(text: String, maxLength: Int): String {
-        if (text.length <= maxLength) return text
-        if (maxLength <= 1) return text.take(1)
-        return text.take(maxLength - 1) + "..."
-    }
-
     private fun sendReminderNotification(
         notificationId: Int,
         title: String,

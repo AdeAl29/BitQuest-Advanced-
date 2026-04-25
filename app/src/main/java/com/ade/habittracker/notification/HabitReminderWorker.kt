@@ -48,7 +48,6 @@ class HabitReminderWorker(
             displayName = sanitizeDisplayName(appData.userName),
             habitName = habit.name,
             habitWeight = habit.weight,
-            schedule = habit.schedule,
             snoozeMinutes = appData.reminderSnoozeMinutes.coerceIn(5, 120),
             isSnooze = inputData.getBoolean(KEY_IS_SNOOZE, false)
         )
@@ -61,7 +60,6 @@ class HabitReminderWorker(
         displayName: String,
         habitName: String,
         habitWeight: Int,
-        schedule: String,
         snoozeMinutes: Int,
         isSnooze: Boolean
     ) {
@@ -94,19 +92,19 @@ class HabitReminderWorker(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val shortHabit = trimLabel(habitName, 26)
-        val title = if (isSnooze) {
-            "$displayName, lanjutkan: $shortHabit"
-        } else {
-            "$displayName, waktunya: $shortHabit"
-        }
-        val message = "Target +$habitWeight XP. Jadwal $schedule, gas sekarang biar streak aman."
+        val copy = ReminderMessageFactory.buildHabitReminder(
+            displayName = displayName,
+            habitName = habitName,
+            habitWeight = habitWeight,
+            isSnooze = isSnooze,
+            seedHint = habitId
+        )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.icon)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setContentTitle(copy.title)
+            .setContentText(copy.message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(copy.message))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(appPendingIntent)
             .setAutoCancel(true)
@@ -143,11 +141,5 @@ class HabitReminderWorker(
             return "Petualang"
         }
         return trimmed
-    }
-
-    private fun trimLabel(text: String, maxLength: Int): String {
-        if (text.length <= maxLength) return text
-        if (maxLength <= 1) return text.take(1)
-        return text.take(maxLength - 1) + "..."
     }
 }

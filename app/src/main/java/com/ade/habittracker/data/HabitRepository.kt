@@ -2,113 +2,96 @@ package com.ade.habittracker.data
 
 import android.content.Context
 import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.ade.habittracker.model.AppData
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 
-// Inisialisasi DataStore
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "habit_tracker_prefs")
+private val Context.localDataStore: DataStore<Preferences> by preferencesDataStore(name = "habit_tracker_preferences")
+private val Context.cachedFirebaseStore: DataStore<Preferences> by preferencesDataStore(name = "habit_tracker_prefs")
 
 class HabitRepository(private val context: Context) {
 
-    private val LEGACY_APP_DATA_KEY = stringPreferencesKey("app_data_json")
-    private val ACTIVE_ACCOUNT_ID_KEY = stringPreferencesKey("active_account_id")
+    private val appDataJsonKey = stringPreferencesKey("app_data_json")
+    private val cachedActiveAccountIdKey = stringPreferencesKey("active_account_id")
 
-    val appData: Flow<AppData?> = context.dataStore.data
+    val appData: Flow<AppData?> = context.localDataStore.data
         .map { preferences ->
-            val activeAccountId = resolveActiveAccountId(preferences)
-            val accountJson = preferences[accountDataKey(activeAccountId)]
-            val legacyJson = preferences[LEGACY_APP_DATA_KEY]
-            val jsonString = accountJson ?: legacyJson
-
-            if (jsonString != null) {
-                AppData.fromJson(jsonString)
-            } else {
-                AppData() // Buat AppData default
-            }
+            preferences[appDataJsonKey]
+                ?.takeIf { it.isNotBlank() }
+                ?.let { AppData.fromJson(it) }
+                ?.let(::normalizeLocalData)
+                ?: defaultLocalData()
         }
+        .onStart {
+            emit(getCurrentAppData())
+        }
+        .distinctUntilChanged()
 
     suspend fun getCurrentAppData(): AppData {
-        val preferences = context.dataStore.data.first()
-        val activeAccountId = resolveActiveAccountId(preferences)
-        val accountJson = preferences[accountDataKey(activeAccountId)]
-        val legacyJson = preferences[LEGACY_APP_DATA_KEY]
-        return when {
-            accountJson != null -> AppData.fromJson(accountJson)
-            legacyJson != null -> AppData.fromJson(legacyJson)
-            else -> AppData()
-        }
-    }
+        readLocalAppData()?.let { return it }
 
-    suspend fun switchActiveAccount(accountId: String?) {
-        val resolvedAccountId = accountId
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: GUEST_ACCOUNT_ID
-
-        context.dataStore.edit { preferences ->
-            preferences[ACTIVE_ACCOUNT_ID_KEY] = resolvedAccountId
-            migrateLegacyDataIfNeeded(preferences, resolvedAccountId)
-        }
+        val migrated = readLegacyCachedAppData()
+        val resolved = normalizeLocalData(migrated ?: AppData())
+        writeLocalAppData(resolved)
+        return resolved
     }
 
     suspend fun saveAppData(appData: AppData) {
-        val jsonString = appData.toJson()
-        context.dataStore.edit { preferences ->
-            val activeAccountId = resolveActiveAccountId(preferences)
-            migrateLegacyDataIfNeeded(preferences, activeAccountId)
-            preferences[accountDataKey(activeAccountId)] = jsonString
+        writeLocalAppData(normalizeLocalData(appData))
+    }
+
+    private suspend fun readLocalAppData(): AppData? {
+        val json = context.localDataStore.data.first()[appDataJsonKey]
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        return AppData.fromJson(json).let(::normalizeLocalData)
+    }
+
+    private suspend fun readLegacyCachedAppData(): AppData? {
+        val preferences = context.cachedFirebaseStore.data.first()
+        val savedAccountId = preferences[cachedActiveAccountIdKey]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        val candidateJson = listOfNotNull(
+            savedAccountId?.let { preferences[accountDataKey(it)] },
+            preferences[accountDataKey("guest_local")],
+            preferences[appDataJsonKey],
+            preferences.asMap().entries
+                .firstOrNull { entry ->
+                    entry.key.name.startsWith("app_data_json_account_") && entry.value is String
+                }
+                ?.value as? String
+        ).firstOrNull { !it.isNullOrBlank() }
+
+        return candidateJson
+            ?.takeIf { it.isNotBlank() }
+            ?.let { AppData.fromJson(it) }
+    }
+
+    private suspend fun writeLocalAppData(appData: AppData) {
+        context.localDataStore.edit { preferences ->
+            preferences[appDataJsonKey] = appData.toJson()
         }
     }
 
-    private fun resolveActiveAccountId(preferences: Preferences): String {
-        val firebaseAccountId = getCurrentFirebaseAccountId()
-        if (firebaseAccountId != null) {
-            return firebaseAccountId
-        }
-
-        val savedAccountId = preferences[ACTIVE_ACCOUNT_ID_KEY]
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-        if (savedAccountId != null) return savedAccountId
-        return GUEST_ACCOUNT_ID
+    private fun normalizeLocalData(appData: AppData): AppData {
+        return appData.copy(isLoggedIn = true)
     }
 
-    private fun getCurrentFirebaseAccountId(): String? {
-        return runCatching { FirebaseAuth.getInstance().currentUser?.uid }
-            .getOrNull()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-    }
+    private fun defaultLocalData(): AppData = AppData(isLoggedIn = true)
 
     private fun accountDataKey(accountId: String): Preferences.Key<String> {
-        return stringPreferencesKey("app_data_json_account_${sanitizeAccountId(accountId)}")
-    }
-
-    private fun sanitizeAccountId(accountId: String): String {
-        return accountId.map { ch ->
+        val sanitized = accountId.map { ch ->
             if (ch.isLetterOrDigit() || ch == '_') ch else '_'
         }.joinToString("")
-    }
-
-    private fun migrateLegacyDataIfNeeded(preferences: MutablePreferences, activeAccountId: String) {
-        if (activeAccountId == GUEST_ACCOUNT_ID) return
-        val legacyJson = preferences[LEGACY_APP_DATA_KEY] ?: return
-        val accountKey = accountDataKey(activeAccountId)
-        if (preferences[accountKey].isNullOrBlank()) {
-            preferences[accountKey] = legacyJson
-        }
-        preferences.remove(LEGACY_APP_DATA_KEY)
-    }
-
-    companion object {
-        const val GUEST_ACCOUNT_ID = "guest_local"
+        return stringPreferencesKey("app_data_json_account_$sanitized")
     }
 }
